@@ -85,6 +85,21 @@
         "minLength": 1
       },
       "minItems": 1
+    },
+    "character_arcs": {
+      "type": "object",
+      "description": "キャラクターの変化アーク（目的・心情の推移）",
+      "additionalProperties": true
+    },
+    "relationships": {
+      "type": "object",
+      "description": "キャラクター間の関係変化履歴",
+      "additionalProperties": true
+    },
+    "themes": {
+      "type": "object",
+      "description": "テーマの進行度（0-100）",
+      "additionalProperties": true
     }
   },
   "additionalProperties": false

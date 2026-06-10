@@ -101,6 +101,9 @@ def test_new_series_creates_resumeable_scene_workflow(tmp_path):
     volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
     assert (volume_dir / "outline.json").exists()
     assert (volume_dir / "chapters" / "chapter_001" / "scene_001.md").read_text(encoding="utf-8").startswith("# 禁書の囁き")
+    chapter_md = (volume_dir / "chapters" / "chapter_001" / "chapter.md").read_text(encoding="utf-8")
+    assert chapter_md.startswith("## 星の降る閲覧室")
+    assert "# 禁書の囁き" in chapter_md
     assert state.volumes[0].status == "drafted"
 
     loaded = forge.status("hoshikuzu-library")

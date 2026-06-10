@@ -13,4 +13,6 @@ wheels/
 workspace/
 demo_workspace/
 smoke_workspace/
+project_novel/
+test_ws/
 probe_logs/

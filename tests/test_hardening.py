@@ -119,6 +119,34 @@ def test_force_complete_volume_exports_even_when_review_not_ready(tmp_path):
         assert "OEBPS/content.opf" in zf.namelist()
 
 
+class NotReadyThenReadyLLM(FakeLLM):
+    def __init__(self):
+        super().__init__()
+        self.volume_review_calls = 0
+
+    def complete_json(self, *, task, messages, schema, temperature=0.4, max_tokens=None):
+        if task == "volume_review":
+            self.calls.append({"task": task, "messages": messages, "schema": schema})
+            self.volume_review_calls += 1
+            if self.volume_review_calls == 1:
+                return {"score": 62, "strengths": ["雰囲気"], "issues": [{"severity": "major", "point": "構成の弱さ"}], "revision_brief": "構成を再調整する。", "ready_for_publication": False}
+            return {"score": 86, "strengths": ["改稿で構成が改善"], "issues": [{"severity": "minor", "point": "軽微な表記ゆれ"}], "revision_brief": "軽微な表記だけ確認。", "ready_for_publication": True}
+        return super().complete_json(task=task, messages=messages, schema=schema, temperature=temperature, max_tokens=max_tokens)
+
+
+def test_complete_volume_revises_and_rechecks_before_export_when_initial_review_not_ready(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=NotReadyThenReadyLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+    state = forge.complete_volume("hoshikuzu-library")
+    volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
+    assert state.volumes[0].status == "revised"
+    assert (volume_dir / "volume_review.json").exists()
+    assert (volume_dir / "volume_review_final.json").exists()
+    assert json.loads((volume_dir / "volume_review_final.json").read_text(encoding="utf-8"))["ready_for_publication"] is True
+    assert (volume_dir / "exports" / "book.epub").exists()
+
+
 def test_llm_non_json_http_200_becomes_llm_client_error(monkeypatch, tmp_path):
     class FakeResponse:
         text = "<html>bad gateway</html>"

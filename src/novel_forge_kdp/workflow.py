@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .llm import OllamaOpenAIClient
-from .models import ProjectState, SceneProgress, SeriesPlan, VolumeOutline, VolumeProgress
+from .models import ChapterPlan, ProjectState, SceneProgress, SeriesPlan, VolumeOutline, VolumeProgress
 from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
 from .prompts import PromptStore
 from .schemas import load_schema
@@ -139,11 +139,25 @@ class NovelForge:
                     scene_md.write_text(f"# {revised['title']}\n\n{revised['body'].strip()}\n", encoding="utf-8")
                     progress.status = "revised"
                     progress.path = str(scene_md.relative_to(series_dir))
+                    self._write_chapter_markdown(volume_dir, chapter)
                     processed += 1
                     self._save_state(series_dir, state)
+        for chapter in outline.chapters:
+            self._write_chapter_markdown(volume_dir, chapter)
         volume.status = "drafted"
         self._save_state(series_dir, state)
         return state
+
+    def _write_chapter_markdown(self, volume_dir: Path, chapter: ChapterPlan) -> None:
+        chapter_dir = ensure_dir(volume_dir / "chapters" / f"chapter_{chapter.number:03d}")
+        parts = [f"## {chapter.title}"]
+        for scene in chapter.scenes:
+            scene_md = chapter_dir / f"scene_{scene.number:03d}.md"
+            if scene_md.exists():
+                text = scene_md.read_text(encoding="utf-8").strip()
+                if text:
+                    parts.append(text)
+        (chapter_dir / "chapter.md").write_text("\n\n".join(parts).strip() + "\n", encoding="utf-8")
 
     @staticmethod
     def _safe_series_file(series_dir: Path, relative_path: str) -> Path:
@@ -190,10 +204,6 @@ class NovelForge:
             schema=load_schema("volume_review"),
         )
         self._write_json(volume_dir / "volume_review.json", review)
-        if not force and not review.get("ready_for_publication", False):
-            volume.status = "reviewed"
-            self._save_state(series_dir, state)
-            raise NovelForgeError("volume review says not ready for publication; rerun with force=True to export anyway")
         revised = self._client_for(series_dir).complete_json(
             task="revise_volume",
             messages=[
@@ -205,6 +215,21 @@ class NovelForge:
         self._write_json(volume_dir / "volume_revised.json", revised)
         revised_md = f"# {revised['title']}\n\n{revised['body'].strip()}\n"
         (volume_dir / "volume_revised.md").write_text(revised_md, encoding="utf-8")
+        final_review = review
+        if not review.get("ready_for_publication", False):
+            final_review = self._client_for(series_dir).complete_json(
+                task="volume_review",
+                messages=[
+                    {"role": "system", "content": _json_system()},
+                    {"role": "user", "content": self.prompts.render("volume_review", series=state.series.model_dump_json(), manuscript=revised_md)},
+                ],
+                schema=load_schema("volume_review"),
+            )
+            self._write_json(volume_dir / "volume_review_final.json", final_review)
+        if not force and not final_review.get("ready_for_publication", False):
+            volume.status = "reviewed"
+            self._save_state(series_dir, state)
+            raise NovelForgeError("volume review says not ready for publication after revision; revised draft saved, rerun with force=True to export anyway")
         self._update_bible(series_dir, revised_md)
         self._export_kdp(volume_dir, revised["title"], revised_md)
         volume.status = "revised"
