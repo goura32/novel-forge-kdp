@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["title", "body", "changes"],
+  "properties": {
+    "title": {"type": "string"},
+    "body": {"type": "string"},
+    "changes": {"type": "array", "items": {"type": "string"}}
+  }
+}

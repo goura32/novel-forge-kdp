@@ -44,6 +44,37 @@ def write_volume(
 
 
 @app.command()
+def complete_volume(
+    slug: Annotated[str, typer.Argument(help="シリーズslug")],
+    workspace: Path = Path("workspace"),
+    volume: int | None = None,
+    ollama_url: str = "http://ws1.local:11434",
+    model: str = "qwen3.6:35b-a3b-mtp-q4_K_M",
+    timeout: int = 3600,
+) -> None:
+    state = forge(workspace, ollama_url, model, timeout).complete_volume(slug, volume)
+    print(f"[green]completed[/green] {state.series.slug} volume={volume or state.current_volume}")
+
+
+@app.command()
+def continue_series(
+    slug: Annotated[str, typer.Argument(help="シリーズslug")],
+    workspace: Path = Path("workspace"),
+    ollama_url: str = "http://ws1.local:11434",
+    model: str = "qwen3.6:35b-a3b-mtp-q4_K_M",
+    timeout: int = 3600,
+) -> None:
+    state = forge(workspace, ollama_url, model, timeout).continue_series(slug)
+    print(f"[green]continued[/green] {state.series.slug} current_volume={state.current_volume}")
+
+
+@app.command()
+def export_volume(slug: str, workspace: Path = Path("workspace"), volume: int | None = None) -> None:
+    path = NovelForge(workspace=workspace).export_volume(slug, volume)
+    print(f"[green]exported[/green] {path}")
+
+
+@app.command()
 def status(slug: str, workspace: Path = Path("workspace")) -> None:
     state = NovelForge(workspace=workspace).status(slug)
     print(state.model_dump_json(indent=2))

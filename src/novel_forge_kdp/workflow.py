@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import json
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +126,130 @@ class NovelForge:
         volume.status = "drafted"
         self._save_state(series_dir, state)
         return state
+
+    def complete_volume(self, slug: str, volume_number: int | None = None) -> ProjectState:
+        series_dir = self.workspace / slug
+        state = self.status(slug)
+        number = volume_number or state.current_volume
+        volume = next((v for v in state.volumes if v.number == number), None)
+        if volume is None or any(scene.status != "revised" for scene in volume.scenes):
+            state = self.write_volume(slug, number)
+            volume = next(v for v in state.volumes if v.number == number)
+        volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
+        manuscript = self._assemble_volume_manuscript(series_dir, volume)
+        review = self._client_for(series_dir).complete_json(
+            task="volume_review",
+            messages=[
+                {"role": "system", "content": _json_system()},
+                {"role": "user", "content": self.prompts.render("volume_review", series=state.series.model_dump_json(), manuscript=manuscript)},
+            ],
+            schema=load_schema("volume_review"),
+        )
+        self._write_json(volume_dir / "volume_review.json", review)
+        revised = self._client_for(series_dir).complete_json(
+            task="revise_volume",
+            messages=[
+                {"role": "system", "content": _json_system()},
+                {"role": "user", "content": self.prompts.render("revise_volume", manuscript=manuscript, review=json.dumps(review, ensure_ascii=False))},
+            ],
+            schema=load_schema("revised_volume"),
+        )
+        self._write_json(volume_dir / "volume_revised.json", revised)
+        revised_md = f"# {revised['title']}\n\n{revised['body'].strip()}\n"
+        (volume_dir / "volume_revised.md").write_text(revised_md, encoding="utf-8")
+        self._update_bible(series_dir, revised_md)
+        self._export_kdp(volume_dir, revised["title"], revised_md)
+        volume.status = "revised"
+        self._save_state(series_dir, state)
+        return state
+
+    def continue_series(self, slug: str) -> ProjectState:
+        state = self.status(slug)
+        current = next((v for v in state.volumes if v.number == state.current_volume), None)
+        if current is None or current.status != "revised":
+            return self.complete_volume(slug, state.current_volume)
+        next_number = state.current_volume + 1
+        state.current_volume = next_number
+        if not any(v.number == next_number for v in state.volumes):
+            planned = next((v for v in state.series.planned_volumes if v.number == next_number), None)
+            title = planned.title if planned is not None else f"Volume {next_number}"
+            state.volumes.append(VolumeProgress(number=next_number, title=title))
+            self._save_state(self.workspace / slug, state)
+        return self.write_volume(slug, next_number)
+
+    def export_volume(self, slug: str, volume_number: int | None = None) -> Path:
+        series_dir = self.workspace / slug
+        state = self.status(slug)
+        number = volume_number or state.current_volume
+        volume = next(v for v in state.volumes if v.number == number)
+        volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
+        manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8") if (volume_dir / "volume_revised.md").exists() else self._assemble_volume_manuscript(series_dir, volume)
+        self._export_kdp(volume_dir, volume.title, manuscript)
+        return volume_dir / "exports" / "manuscript.md"
+
+    def _assemble_volume_manuscript(self, series_dir: Path, volume: VolumeProgress) -> str:
+        parts = [f"# {volume.title}"]
+        for scene in sorted(volume.scenes, key=lambda s: (s.chapter, s.scene)):
+            if scene.path is None:
+                continue
+            parts.append((series_dir / scene.path).read_text(encoding="utf-8").strip())
+        return "\n\n".join(parts).strip() + "\n"
+
+    def _update_bible(self, series_dir: Path, manuscript: str) -> None:
+        bible_path = series_dir / "bible.json"
+        existing = bible_path.read_text(encoding="utf-8") if bible_path.exists() else "{}"
+        bible = self._client_for(series_dir).complete_json(
+            task="bible_update",
+            messages=[
+                {"role": "system", "content": _json_system()},
+                {"role": "user", "content": self.prompts.render("bible_update", existing_bible=existing, manuscript=manuscript)},
+            ],
+            schema=load_schema("bible_update"),
+        )
+        self._write_json(bible_path, bible)
+
+    @staticmethod
+    def _export_kdp(volume_dir: Path, title: str, manuscript: str) -> None:
+        exports = ensure_dir(volume_dir / "exports")
+        clean = manuscript.strip() + "\n"
+        (exports / "manuscript.md").write_text(clean, encoding="utf-8")
+        text = clean.replace("# ", "").replace("## ", "")
+        (exports / "kdp.txt").write_text(text.strip() + "\n", encoding="utf-8")
+        (exports / "metadata.json").write_text(json.dumps({"title": title, "format": "KDP text/markdown/EPUB draft"}, ensure_ascii=False, indent=2), encoding="utf-8")
+        NovelForge._write_epub(exports / "book.epub", title, clean)
+
+    @staticmethod
+    def _write_epub(path: Path, title: str, manuscript: str) -> None:
+        paragraphs = [p.strip() for p in manuscript.split("\n\n") if p.strip()]
+        body = "\n".join(f"<p>{html.escape(p).replace(chr(10), '<br/>')}</p>" for p in paragraphs)
+        chapter = f'''<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ja">
+<head><title>{html.escape(title)}</title></head>
+<body>{body}</body>
+</html>
+'''
+        nav = f'''<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="ja">
+<head><title>{html.escape(title)}</title></head>
+<body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">{html.escape(title)}</a></li></ol></nav></body>
+</html>
+'''
+        opf = f'''<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="ja">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">novel-forge-kdp</dc:identifier><dc:title>{html.escape(title)}</dc:title><dc:language>ja</dc:language></metadata>
+  <manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="chapter"/></spine>
+</package>
+'''
+        container = '''<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>
+'''
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            zf.writestr("META-INF/container.xml", container)
+            zf.writestr("OEBPS/content.opf", opf)
+            zf.writestr("OEBPS/nav.xhtml", nav)
+            zf.writestr("OEBPS/chapter.xhtml", chapter)
 
     def _save_state(self, series_dir: Path, state: ProjectState) -> None:
         self._write_json(series_dir / "state.json", state.model_dump())

@@ -26,12 +26,19 @@ class FakeLLM:
                 "selling_points": ["謎解き", "成長"],
                 "world": {"summary": "本が星になる都市。", "rules": ["禁書は夜に目覚める"]},
                 "main_characters": [{"name": "澪", "role": "司書", "arc": "孤独から連帯へ"}],
-                "planned_volumes": [{"number": 1, "title": "夜明けの禁書", "premise": "禁書を巡る第一巻。"}],
+                "planned_volumes": [
+                    {"number": 1, "title": "夜明けの禁書", "premise": "禁書を巡る第一巻。"},
+                    {"number": 2, "title": "黄昏の目録", "premise": "失われた目録を巡る第二巻。"},
+                ],
             }
         if task == "volume_outline":
+            volume_number = 1
+            for m in messages:
+                if "対象巻: 2" in m.get("content", ""):
+                    volume_number = 2
             return {
-                "volume_number": 1,
-                "title": "夜明けの禁書",
+                "volume_number": volume_number,
+                "title": "夜明けの禁書" if volume_number == 1 else "黄昏の目録",
                 "chapters": [
                     {
                         "number": 1,
@@ -49,6 +56,17 @@ class FakeLLM:
             return {"score": 82, "strengths": ["雰囲気"], "issues": [{"severity": "minor", "point": "描写を増やす"}], "revision_brief": "情景描写を一段増やす。"}
         if task == "revise_scene":
             return {"title": "禁書の囁き", "body": "澪は夜の図書館で、星の匂いがする本を開いた。窓辺には青白い光が降り積もっていた。", "changes": ["情景描写を追加"]}
+        if task == "volume_review":
+            return {"score": 88, "strengths": ["統一感"], "issues": [{"severity": "minor", "point": "終盤の余韻を補強"}], "revision_brief": "巻末の余韻を増やす。", "ready_for_publication": False}
+        if task == "revise_volume":
+            return {"title": "夜明けの禁書", "body": "# 禁書の囁き\n\n澪は夜の図書館で、星の匂いがする本を開いた。余韻が残った。", "changes": ["巻末の余韻を補強"]}
+        if task == "bible_update":
+            return {
+                "characters": [{"name": "澪", "description": "星の司書", "status": "旅立ちを決意"}],
+                "terms": [{"term": "禁書", "description": "星の匂いがする本"}],
+                "foreshadowing": [{"item": "青白い光", "status": "open"}],
+                "continuity_notes": ["澪は禁書を開いた"],
+            }
         raise AssertionError(task)
 
 
@@ -87,3 +105,34 @@ def test_new_series_creates_resumeable_scene_workflow(tmp_path):
 
     loaded = forge.status("hoshikuzu-library")
     assert loaded.volumes[0].scenes[0].status == "revised"
+
+
+def test_complete_volume_reviews_revises_exports_and_updates_bible(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+
+    state = forge.complete_volume("hoshikuzu-library")
+    series_dir = tmp_path / "hoshikuzu-library"
+    volume_dir = series_dir / "volume_001"
+
+    assert state.volumes[0].status == "revised"
+    assert (volume_dir / "volume_review.json").exists()
+    assert (volume_dir / "volume_revised.md").read_text(encoding="utf-8").startswith("# 夜明けの禁書")
+    assert (volume_dir / "exports" / "manuscript.md").exists()
+    assert (volume_dir / "exports" / "kdp.txt").read_text(encoding="utf-8").startswith("夜明けの禁書")
+    assert (volume_dir / "exports" / "book.epub").read_bytes().startswith(b"PK")
+    bible = json.loads((series_dir / "bible.json").read_text(encoding="utf-8"))
+    assert bible["characters"][0]["name"] == "澪"
+
+
+def test_continue_series_revises_unfinished_or_starts_next_volume(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    first = forge.continue_series("hoshikuzu-library")
+    assert first.volumes[0].status == "revised"
+
+    second = forge.continue_series("hoshikuzu-library")
+    assert second.current_volume == 2
+    assert any(v.number == 2 for v in second.volumes)
+    assert (tmp_path / "hoshikuzu-library" / "volume_002" / "outline.json").exists()

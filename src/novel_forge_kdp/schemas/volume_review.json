@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": ["score", "strengths", "issues", "revision_brief", "ready_for_publication"],
+  "properties": {
+    "score": {"type": "integer"},
+    "strengths": {"type": "array", "items": {"type": "string"}},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "point"],
+        "properties": {
+          "severity": {"type": "string"},
+          "point": {"type": "string"}
+        }
+      }
+    },
+    "revision_brief": {"type": "string"},
+    "ready_for_publication": {"type": "boolean"}
+  }
+}
