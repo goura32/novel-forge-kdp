@@ -37,8 +37,9 @@ def write_volume(
     ollama_url: str = "http://ws1.local:11434",
     model: str = "qwen3.6:35b-a3b-mtp-q4_K_M",
     timeout: int = 3600,
+    max_scenes: Annotated[int | None, typer.Option(help="検証・スモーク用に処理するシーン数を制限。通常運用では未指定")]=None,
 ) -> None:
-    state = forge(workspace, ollama_url, model, timeout).write_volume(slug, volume)
+    state = forge(workspace, ollama_url, model, timeout).write_volume(slug, volume, max_scenes=max_scenes)
     print(f"[green]volume complete[/green] {state.series.slug} volume={volume or state.current_volume}")
 
 

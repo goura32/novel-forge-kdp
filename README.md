@@ -94,6 +94,12 @@ uv run novel-forge-kdp plan-series "魔法学校 政治陰謀 家族の秘密"
 uv run novel-forge-kdp write-volume <series-slug>
 ```
 
+実モデルのスモーク検証などで1シーンだけ処理する場合:
+
+```bash
+uv run novel-forge-kdp write-volume <series-slug> --max-scenes 1
+```
+
 進捗確認:
 
 ```bash
@@ -138,7 +144,7 @@ workspace/<series-slug>/
 - [x] コア状態管理とワークフロー実装
 - [x] TDDテスト追加
 - [x] CLI実装
-- [x] CLIから実モデルで `probe-model` と `plan-series` を実行確認
+- [x] CLIから実モデルで `probe-model` / `plan-series` / `write-volume --max-scenes 1` を実行確認
 - [ ] 巻全体レビュー・次巻作成フロー
 - [ ] EPUB/KDP出力
 - [ ] 長編品質管理機能

@@ -48,7 +48,7 @@ class NovelForge:
     def status(self, slug: str) -> ProjectState:
         return ProjectState.model_validate_json((self.workspace / slug / "state.json").read_text(encoding="utf-8"))
 
-    def write_volume(self, slug: str, volume_number: int | None = None) -> ProjectState:
+    def write_volume(self, slug: str, volume_number: int | None = None, max_scenes: int | None = None) -> ProjectState:
         series_dir = self.workspace / slug
         state = self.status(slug)
         number = volume_number or state.current_volume
@@ -78,8 +78,12 @@ class NovelForge:
             volume.scenes = [SceneProgress(chapter=c.number, scene=s.number, title=s.title) for c in outline.chapters for s in c.scenes]
             self._save_state(series_dir, state)
 
+        processed = 0
         for chapter in outline.chapters:
             for scene in chapter.scenes:
+                if max_scenes is not None and processed >= max_scenes:
+                    self._save_state(series_dir, state)
+                    return state
                 progress = next(p for p in volume.scenes if p.chapter == chapter.number and p.scene == scene.number)
                 scene_dir = ensure_dir(volume_dir / "chapters" / f"chapter_{chapter.number:03d}")
                 scene_md = scene_dir / f"scene_{scene.number:03d}.md"
@@ -115,6 +119,7 @@ class NovelForge:
                     scene_md.write_text(f"# {revised['title']}\n\n{revised['body'].strip()}\n", encoding="utf-8")
                     progress.status = "revised"
                     progress.path = str(scene_md.relative_to(series_dir))
+                    processed += 1
                     self._save_state(series_dir, state)
         volume.status = "drafted"
         self._save_state(series_dir, state)
