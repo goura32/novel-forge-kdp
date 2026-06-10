@@ -1,35 +1,89 @@
 {
   "type": "object",
-  "required": ["volume_number", "title", "chapters"],
+  "required": [
+    "volume_number",
+    "title",
+    "chapters"
+  ],
   "properties": {
-    "volume_number": {"type": "integer"},
-    "title": {"type": "string"},
+    "volume_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
     "chapters": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["number", "title", "purpose", "scenes"],
+        "required": [
+          "number",
+          "title",
+          "purpose",
+          "scenes"
+        ],
         "properties": {
-          "number": {"type": "integer"},
-          "title": {"type": "string"},
-          "purpose": {"type": "string"},
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1
+          },
           "scenes": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["number", "title", "pov", "goal", "conflict", "outcome"],
+              "required": [
+                "number",
+                "title",
+                "pov",
+                "goal",
+                "conflict",
+                "outcome"
+              ],
               "properties": {
-                "number": {"type": "integer"},
-                "title": {"type": "string"},
-                "pov": {"type": "string"},
-                "goal": {"type": "string"},
-                "conflict": {"type": "string"},
-                "outcome": {"type": "string"}
-              }
-            }
+                "number": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pov": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "goal": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "conflict": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "outcome": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            "minItems": 1
           }
-        }
-      }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
     }
-  }
+  },
+  "additionalProperties": false
 }

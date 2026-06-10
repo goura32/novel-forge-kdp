@@ -1,0 +1,161 @@
+import json
+import zipfile
+
+import pytest
+from typer.testing import CliRunner
+
+from novel_forge_kdp.cli import app
+from novel_forge_kdp.llm import LLMClientError, OllamaOpenAIClient
+from novel_forge_kdp.workflow import NovelForge, NovelForgeError
+
+
+class FakeLLM:
+    def __init__(self):
+        self.calls = []
+
+    def complete_json(self, *, task, messages, schema, temperature=0.4, max_tokens=None):
+        self.calls.append({"task": task, "messages": messages, "schema": schema})
+        if task == "series_plan":
+            return {
+                "title": "星屑の図書館",
+                "slug": "hoshikuzu-library",
+                "logline": "失われた物語を取り戻す司書の冒険。",
+                "genre": "ライト文芸ファンタジー",
+                "target_audience": "KDP読者",
+                "themes": ["記憶", "再生"],
+                "selling_points": ["謎解き", "成長"],
+                "world": {"summary": "本が星になる都市。", "rules": ["禁書は夜に目覚める"]},
+                "main_characters": [{"name": "澪", "role": "司書", "arc": "孤独から連帯へ"}],
+                "planned_volumes": [{"number": 1, "title": "夜明けの禁書", "premise": "禁書を巡る第一巻。"}],
+            }
+        if task == "volume_outline":
+            return {"volume_number": 1, "title": "夜明けの禁書", "chapters": [{"number": 1, "title": "星の降る閲覧室", "purpose": "導入", "scenes": [{"number": 1, "title": "禁書の囁き", "pov": "澪", "goal": "禁書を見つける", "conflict": "封印が解ける", "outcome": "旅立ちを決意"}]}]}
+        if task == "scene_draft":
+            return {"title": "禁書の囁き", "body": "澪は夜の図書館で、星の匂いがする本を開いた。", "continuity_notes": ["禁書が登場"]}
+        if task == "review":
+            return {"score": 82, "strengths": ["雰囲気"], "issues": [{"severity": "minor", "point": "描写を増やす"}], "revision_brief": "情景描写を一段増やす。"}
+        if task == "revise_scene":
+            return {"title": "禁書の囁き", "body": "澪は夜の図書館で、星の匂いがする本を開いた。窓辺には青白い光が降り積もっていた。", "changes": ["情景描写を追加"]}
+        if task == "volume_review":
+            return {"score": 88, "strengths": ["統一感"], "issues": [{"severity": "minor", "point": "終盤の余韻を補強"}], "revision_brief": "巻末の余韻を増やす。", "ready_for_publication": True}
+        if task == "revise_volume":
+            return {"title": "夜明けの禁書", "body": "# 禁書の囁き\n\n澪は夜の図書館で、星の匂いがする本を開いた。余韻が残った。", "changes": ["巻末の余韻を補強"]}
+        if task == "bible_update":
+            return {"characters": [{"name": "澪", "description": "星の司書", "status": "旅立ちを決意"}], "terms": [{"term": "禁書", "description": "星の匂いがする本"}], "foreshadowing": [{"item": "青白い光", "status": "open"}], "continuity_notes": ["澪は禁書を開いた"]}
+        raise AssertionError(task)
+
+
+class NotReadyLLM(FakeLLM):
+    def complete_json(self, *, task, messages, schema, temperature=0.4, max_tokens=None):
+        if task == "volume_review":
+            self.calls.append({"task": task, "messages": messages, "schema": schema})
+            return {"score": 62, "strengths": ["雰囲気"], "issues": [{"severity": "major", "point": "構成の弱さ"}], "revision_brief": "構成を再調整する。", "ready_for_publication": False}
+        return super().complete_json(task=task, messages=messages, schema=schema, temperature=temperature, max_tokens=max_tokens)
+
+
+def test_slug_traversal_is_rejected(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    with pytest.raises(NovelForgeError):
+        forge.status("../outside")
+    with pytest.raises(NovelForgeError):
+        forge.write_volume("bad/path")
+
+
+def test_plan_series_refuses_existing_slug_without_overwrite(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    with pytest.raises(NovelForgeError):
+        forge.plan_series("星 図書館")
+
+
+def test_atomic_json_write_keeps_backup(tmp_path):
+    path = tmp_path / "state.json"
+    NovelForge._write_json(path, {"version": 1})
+    NovelForge._write_json(path, {"version": 2})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 2}
+    assert json.loads(path.with_suffix(".json.bak").read_text(encoding="utf-8")) == {"version": 1}
+
+
+def test_complete_volume_fails_when_revised_scene_file_missing(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+    scene = tmp_path / "hoshikuzu-library" / "volume_001" / "chapters" / "chapter_001" / "scene_001.md"
+    scene.unlink()
+    with pytest.raises(NovelForgeError, match="missing scene manuscript"):
+        forge.complete_volume("hoshikuzu-library")
+
+
+def test_complete_volume_rejects_scene_path_traversal(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("SECRET", encoding="utf-8")
+    state = forge.status("hoshikuzu-library")
+    state.volumes[0].scenes[0].path = "../secret.txt"
+    NovelForge._write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
+    with pytest.raises(NovelForgeError, match="escapes series directory"):
+        forge.complete_volume("hoshikuzu-library")
+
+
+def test_quality_gate_blocks_export_when_review_not_ready(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=NotReadyLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+    with pytest.raises(NovelForgeError, match="not ready for publication"):
+        forge.complete_volume("hoshikuzu-library")
+    assert not (tmp_path / "hoshikuzu-library" / "volume_001" / "exports" / "book.epub").exists()
+
+
+def test_force_complete_volume_exports_even_when_review_not_ready(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=NotReadyLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+    state = forge.complete_volume("hoshikuzu-library", force=True)
+    assert state.volumes[0].status == "revised"
+    epub = tmp_path / "hoshikuzu-library" / "volume_001" / "exports" / "book.epub"
+    with zipfile.ZipFile(epub) as zf:
+        assert "OEBPS/content.opf" in zf.namelist()
+
+
+def test_llm_non_json_http_200_becomes_llm_client_error(monkeypatch, tmp_path):
+    class FakeResponse:
+        text = "<html>bad gateway</html>"
+        status_code = 200
+        def raise_for_status(self):
+            return None
+        def json(self):
+            raise ValueError("not json")
+
+    class FakeClient:
+        def __init__(self, timeout):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("httpx.Client", FakeClient)
+    client = OllamaOpenAIClient(log_dir=tmp_path)
+    with pytest.raises(LLMClientError, match="response was not JSON"):
+        client.complete_json(task="x", messages=[{"role": "user", "content": "x"}], schema={"type": "object"})
+
+
+def test_cli_missing_series_returns_clean_error(tmp_path):
+    result = CliRunner().invoke(app, ["status", "missing", "--workspace", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "ERROR:" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_missing_export_volume_returns_clean_error(tmp_path):
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    result = CliRunner().invoke(app, ["export-volume", "hoshikuzu-library", "--workspace", str(tmp_path), "--volume", "99"])
+    assert result.exit_code == 1
+    assert "ERROR:" in result.output
+    assert "volume not found: 99" in result.output
+    assert "Traceback" not in result.output

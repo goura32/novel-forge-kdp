@@ -57,7 +57,7 @@ class FakeLLM:
         if task == "revise_scene":
             return {"title": "禁書の囁き", "body": "澪は夜の図書館で、星の匂いがする本を開いた。窓辺には青白い光が降り積もっていた。", "changes": ["情景描写を追加"]}
         if task == "volume_review":
-            return {"score": 88, "strengths": ["統一感"], "issues": [{"severity": "minor", "point": "終盤の余韻を補強"}], "revision_brief": "巻末の余韻を増やす。", "ready_for_publication": False}
+            return {"score": 88, "strengths": ["統一感"], "issues": [{"severity": "minor", "point": "終盤の余韻を補強"}], "revision_brief": "巻末の余韻を増やす。", "ready_for_publication": True}
         if task == "revise_volume":
             return {"title": "夜明けの禁書", "body": "# 禁書の囁き\n\n澪は夜の図書館で、星の匂いがする本を開いた。余韻が残った。", "changes": ["巻末の余韻を補強"]}
         if task == "bible_update":

@@ -1,9 +1,26 @@
 {
   "type": "object",
-  "required": ["title", "body"],
+  "required": [
+    "title",
+    "body"
+  ],
   "properties": {
-    "title": {"type": "string"},
-    "body": {"type": "string"},
-    "continuity_notes": {"type": "array", "items": {"type": "string"}}
-  }
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1
+    },
+    "continuity_notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false
 }

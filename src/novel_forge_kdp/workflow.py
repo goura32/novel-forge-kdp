@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import zipfile
 from pathlib import Path
 from typing import Any
 
 from .llm import OllamaOpenAIClient
 from .models import ProjectState, SceneProgress, SeriesPlan, VolumeOutline, VolumeProgress
-from .paths import ensure_dir, safe_slug
+from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
 from .prompts import PromptStore
 from .schemas import load_schema
+
+
+class NovelForgeError(RuntimeError):
+    pass
 
 
 class NovelForge:
@@ -27,6 +32,12 @@ class NovelForge:
             return self.llm
         return OllamaOpenAIClient(log_dir=(series_dir / "raw_logs") if series_dir is not None else (self.workspace / "_raw_logs"))
 
+    def _series_dir(self, slug: str) -> Path:
+        try:
+            return safe_child_dir(self.workspace, slug)
+        except PathSafetyError as exc:
+            raise NovelForgeError(str(exc)) from exc
+
     def plan_series(self, keyword: str) -> ProjectState:
         schema = load_schema("series_plan")
         prompt = self.prompts.render("series_plan", keyword=keyword)
@@ -41,17 +52,23 @@ class NovelForge:
             series=series,
             volumes=[VolumeProgress(number=v.number, title=v.title) for v in series.planned_volumes[:1]],
         )
-        series_dir = ensure_dir(self.workspace / series.slug)
+        series_dir = self._series_dir(series.slug)
+        if series_dir.exists():
+            raise NovelForgeError(f"series already exists: {series.slug}")
+        ensure_dir(series_dir)
         ensure_dir(series_dir / "raw_logs")
         self._write_json(series_dir / "series_plan.json", series.model_dump())
         self._save_state(series_dir, state)
         return state
 
     def status(self, slug: str) -> ProjectState:
-        return ProjectState.model_validate_json((self.workspace / slug / "state.json").read_text(encoding="utf-8"))
+        state_path = self._series_dir(slug) / "state.json"
+        if not state_path.exists():
+            raise NovelForgeError(f"series not found: {slug}")
+        return ProjectState.model_validate_json(state_path.read_text(encoding="utf-8"))
 
     def write_volume(self, slug: str, volume_number: int | None = None, max_scenes: int | None = None) -> ProjectState:
-        series_dir = self.workspace / slug
+        series_dir = self._series_dir(slug)
         state = self.status(slug)
         number = volume_number or state.current_volume
         volume = next((v for v in state.volumes if v.number == number), None)
@@ -65,6 +82,7 @@ class NovelForge:
         outline_path = volume_dir / "outline.json"
         if outline_path.exists():
             outline = VolumeOutline.model_validate_json(outline_path.read_text(encoding="utf-8"))
+            self._sync_volume_scenes(volume, outline)
         else:
             outline_data = self._client_for(series_dir).complete_json(
                 task="volume_outline",
@@ -77,7 +95,7 @@ class NovelForge:
             outline = VolumeOutline.model_validate(outline_data)
             self._write_json(outline_path, outline.model_dump())
             volume.status = "outlined"
-            volume.scenes = [SceneProgress(chapter=c.number, scene=s.number, title=s.title) for c in outline.chapters for s in c.scenes]
+            self._sync_volume_scenes(volume, outline)
             self._save_state(series_dir, state)
 
         processed = 0
@@ -127,12 +145,38 @@ class NovelForge:
         self._save_state(series_dir, state)
         return state
 
-    def complete_volume(self, slug: str, volume_number: int | None = None) -> ProjectState:
-        series_dir = self.workspace / slug
+    @staticmethod
+    def _safe_series_file(series_dir: Path, relative_path: str) -> Path:
+        candidate_raw = Path(relative_path)
+        if candidate_raw.is_absolute():
+            raise NovelForgeError(f"scene manuscript path escapes series directory: {relative_path}")
+        root = series_dir.resolve()
+        candidate = (root / candidate_raw).resolve()
+        if root != candidate and root not in candidate.parents:
+            raise NovelForgeError(f"scene manuscript path escapes series directory: {relative_path}")
+        return candidate
+
+    @staticmethod
+    def _sync_volume_scenes(volume: VolumeProgress, outline: VolumeOutline) -> None:
+        existing = {(scene.chapter, scene.scene): scene for scene in volume.scenes}
+        synced: list[SceneProgress] = []
+        for chapter in outline.chapters:
+            for scene in chapter.scenes:
+                current = existing.get((chapter.number, scene.number))
+                if current is None:
+                    current = SceneProgress(chapter=chapter.number, scene=scene.number, title=scene.title)
+                else:
+                    current.title = scene.title
+                synced.append(current)
+        volume.scenes = synced
+        volume.title = outline.title
+
+    def complete_volume(self, slug: str, volume_number: int | None = None, force: bool = False) -> ProjectState:
+        series_dir = self._series_dir(slug)
         state = self.status(slug)
         number = volume_number or state.current_volume
         volume = next((v for v in state.volumes if v.number == number), None)
-        if volume is None or any(scene.status != "revised" for scene in volume.scenes):
+        if volume is None or not volume.scenes or any(scene.status != "revised" for scene in volume.scenes):
             state = self.write_volume(slug, number)
             volume = next(v for v in state.volumes if v.number == number)
         volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
@@ -146,6 +190,10 @@ class NovelForge:
             schema=load_schema("volume_review"),
         )
         self._write_json(volume_dir / "volume_review.json", review)
+        if not force and not review.get("ready_for_publication", False):
+            volume.status = "reviewed"
+            self._save_state(series_dir, state)
+            raise NovelForgeError("volume review says not ready for publication; rerun with force=True to export anyway")
         revised = self._client_for(series_dir).complete_json(
             task="revise_volume",
             messages=[
@@ -174,14 +222,16 @@ class NovelForge:
             planned = next((v for v in state.series.planned_volumes if v.number == next_number), None)
             title = planned.title if planned is not None else f"Volume {next_number}"
             state.volumes.append(VolumeProgress(number=next_number, title=title))
-            self._save_state(self.workspace / slug, state)
+            self._save_state(self._series_dir(slug), state)
         return self.write_volume(slug, next_number)
 
     def export_volume(self, slug: str, volume_number: int | None = None) -> Path:
-        series_dir = self.workspace / slug
+        series_dir = self._series_dir(slug)
         state = self.status(slug)
         number = volume_number or state.current_volume
-        volume = next(v for v in state.volumes if v.number == number)
+        volume = next((v for v in state.volumes if v.number == number), None)
+        if volume is None:
+            raise NovelForgeError(f"volume not found: {number}")
         volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
         manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8") if (volume_dir / "volume_revised.md").exists() else self._assemble_volume_manuscript(series_dir, volume)
         self._export_kdp(volume_dir, volume.title, manuscript)
@@ -190,9 +240,19 @@ class NovelForge:
     def _assemble_volume_manuscript(self, series_dir: Path, volume: VolumeProgress) -> str:
         parts = [f"# {volume.title}"]
         for scene in sorted(volume.scenes, key=lambda s: (s.chapter, s.scene)):
+            if scene.status != "revised":
+                raise NovelForgeError(f"scene is not revised: chapter={scene.chapter} scene={scene.scene}")
             if scene.path is None:
-                continue
-            parts.append((series_dir / scene.path).read_text(encoding="utf-8").strip())
+                raise NovelForgeError(f"missing scene manuscript path: chapter={scene.chapter} scene={scene.scene}")
+            scene_path = self._safe_series_file(series_dir, scene.path)
+            if not scene_path.exists():
+                raise NovelForgeError(f"missing scene manuscript: {scene.path}")
+            text = scene_path.read_text(encoding="utf-8").strip()
+            if not text:
+                raise NovelForgeError(f"empty scene manuscript: {scene.path}")
+            parts.append(text)
+        if len(parts) == 1:
+            raise NovelForgeError(f"volume has no revised scenes: volume={volume.number}")
         return "\n\n".join(parts).strip() + "\n"
 
     def _update_bible(self, series_dir: Path, manuscript: str) -> None:
@@ -257,7 +317,16 @@ class NovelForge:
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        tmp = path.with_name(path.name + ".tmp")
+        backup = path.with_suffix(path.suffix + ".bak")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists():
+            backup.write_bytes(path.read_bytes())
+        tmp.replace(path)
 
 
 def _json_system() -> str:

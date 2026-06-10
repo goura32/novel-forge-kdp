@@ -1,21 +1,59 @@
 {
   "type": "object",
-  "required": ["score", "strengths", "issues", "revision_brief", "ready_for_publication"],
+  "required": [
+    "score",
+    "strengths",
+    "issues",
+    "revision_brief",
+    "ready_for_publication"
+  ],
   "properties": {
-    "score": {"type": "integer"},
-    "strengths": {"type": "array", "items": {"type": "string"}},
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "strengths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
     "issues": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "point"],
+        "required": [
+          "severity",
+          "point"
+        ],
         "properties": {
-          "severity": {"type": "string"},
-          "point": {"type": "string"}
-        }
+          "severity": {
+            "type": "string",
+            "minLength": 1,
+            "enum": [
+              "minor",
+              "major",
+              "critical"
+            ]
+          },
+          "point": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "revision_brief": {"type": "string"},
-    "ready_for_publication": {"type": "boolean"}
-  }
+    "revision_brief": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ready_for_publication": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
 }

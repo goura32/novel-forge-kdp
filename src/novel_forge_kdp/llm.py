@@ -76,7 +76,11 @@ class OllamaOpenAIClient:
             self._write_log(task, started, payload, {"error": repr(exc)})
             raise LLMClientError(f"LLM request failed: {exc}") from exc
 
-        raw = response.json()
+        try:
+            raw = response.json()
+        except ValueError as exc:
+            self._write_log(task, started, payload, {"status_code": response.status_code, "non_json_text": response.text[:2000]})
+            raise LLMClientError(f"LLM response was not JSON: {response.text[:500]}") from exc
         self._write_log(task, started, payload, raw)
         content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
         parsed = parse_json_content(content)

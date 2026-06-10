@@ -13,6 +13,8 @@
 - シーン、巻、シリーズ台帳のレビュー・改稿
 - Markdown / text / EPUB のKDP向けドラフト出力
 - 完成済み巻なら次巻へ進み、未完了なら再開・改稿する自律継続
+- slug安全化、既存シリーズ衝突拒否、atomic write + `.bak` によるデータ保全
+- 出版準備判定に基づく品質ゲート（`--force` 指定時のみ強制出力）
 
 ## 実測済みモデル挙動
 
@@ -41,6 +43,8 @@
 - Schemaをプロンプト末尾にも添付して、OpenAI互換 `response_format` だけに依存しない
 - よくある `{result: ...}` / `{series: ...}` 形式の外側コンテナはSchema検証前に安全にunwrap
 - シーン単位・巻単位で状態保存し、途中失敗しても再開可能にする
+- `state.json` などの重要JSONは一時ファイルに書いてから置換し、直前ファイルを `.bak` として残す
+- LLMがHTTP 200で非JSONを返した場合も `LLMClientError` として明示する
 
 ## 実装範囲
 
@@ -49,7 +53,7 @@
 - `probe-model`: モデル接続・JSON応答確認
 - `plan-series`: キーワードからシリーズ企画を生成
 - `write-volume`: 1巻分のアウトライン生成、各シーン初稿、レビュー、改稿、Markdown本文出力
-- `complete-volume`: 巻全体レビュー、巻全体改稿、シリーズ台帳更新、KDP向け出力
+- `complete-volume`: 巻全体レビュー、巻全体改稿、シリーズ台帳更新、KDP向けドラフト出力。レビューが出版準備未完了なら停止し、必要な場合のみ `--force` で強制出力
 - `continue-series`: 新規/途中なら現巻を完成、完成済みなら次巻を作成
 - `export-volume`: 既存原稿からKDP向けファイルを再出力
 - `status`: `state.json` の進捗確認
@@ -95,10 +99,16 @@ uv run novel-forge-kdp plan-series "魔法学校 政治陰謀 家族の秘密"
 uv run novel-forge-kdp write-volume <series-slug>
 ```
 
-巻全体レビュー、巻全体改稿、台帳更新、KDP向け出力:
+巻全体レビュー、巻全体改稿、台帳更新、KDP向けドラフト出力:
 
 ```bash
 uv run novel-forge-kdp complete-volume <series-slug>
+```
+
+レビューが出版準備未完了でも検証用に出力したい場合:
+
+```bash
+uv run novel-forge-kdp complete-volume <series-slug> --force
 ```
 
 自律継続。未完了なら再開・完成、完成済みなら次巻作成:
@@ -132,6 +142,7 @@ uv run novel-forge-kdp status <series-slug>
 ```text
 workspace/<series-slug>/
   state.json
+  state.json.bak
   series_plan.json
   bible.json
   raw_logs/
@@ -159,9 +170,11 @@ workspace/<series-slug>/
 - 本文はシーン単位で生成し、レビューと改稿を必ず通す。
 - 巻全体でもレビューと改稿を行い、単発シーンの寄せ集めで終わらせない。
 - プロンプトはMarkdownファイルとして管理し、コード直書きを避ける。
-- RAWログは再現性・検証・プロンプト改善の材料として残す。
-- `state.json` を各ステップ後に保存し、任意タイミングの中断・再開を可能にする。
+- RAWログは再現性・検証・プロンプト改善の材料として残す。未公開原稿とプロットが平文保存されるため、共有・公開・バックアップ時は取り扱いに注意する。
+- `state.json` を各ステップ後にatomic writeし、直前ファイルを `.bak` として保存する。
 - `bible.json` でキャラクター、用語、伏線、継続性メモを蓄積する。
+- 出版準備判定がfalseの巻は標準では停止し、`--force` 指定時のみ出力する。
+- EPUBはKDP向け確認用のドラフトとして生成する。商用品質の最終EPUBには別途epubcheckや表紙・CSS・詳細メタデータ調整を行う。
 - モデルの長時間応答を前提に、timeoutは1時間。
 - 暗黙フォールバックより明示エラーを優先する。
 
@@ -176,7 +189,12 @@ workspace/<series-slug>/
 - [x] 巻全体レビュー・巻全体改稿
 - [x] 完成済み巻に対する次巻作成フロー
 - [x] キャラクター・用語・伏線台帳の自動更新
-- [x] Markdown / text / EPUB のKDP向け出力
+- [x] Markdown / text / EPUB のKDP向けドラフト出力
+- [x] slug安全化・パストラバーサル拒否・既存シリーズ上書き拒否
+- [x] atomic write + `.bak` による状態ファイル保護
+- [x] 不完全原稿の黙殺禁止とLLM非JSON応答の明示例外化
+- [x] 出版準備判定に基づく品質ゲート
+- [x] Schema制約強化と異常系テスト追加
 - [x] CLI実装
 - [x] TDDテスト追加
 - [x] CLIから実モデルで `probe-model` / `plan-series` / `write-volume --max-scenes 1` を実行確認
