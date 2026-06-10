@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "required": ["volume_number", "title", "chapters"],
+  "properties": {
+    "volume_number": {"type": "integer"},
+    "title": {"type": "string"},
+    "chapters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["number", "title", "purpose", "scenes"],
+        "properties": {
+          "number": {"type": "integer"},
+          "title": {"type": "string"},
+          "purpose": {"type": "string"},
+          "scenes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["number", "title", "pov", "goal", "conflict", "outcome"],
+              "properties": {
+                "number": {"type": "integer"},
+                "title": {"type": "string"},
+                "pov": {"type": "string"},
+                "goal": {"type": "string"},
+                "conflict": {"type": "string"},
+                "outcome": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

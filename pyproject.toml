@@ -1,0 +1,26 @@
+[project]
+name = "novel-forge-kdp"
+version = "0.1.0"
+description = "Local-LLM assisted autonomous novel planning, drafting, reviewing, and revision for KDP workflows"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "httpx>=0.28.1",
+    "jsonschema>=4.26.0",
+    "pydantic>=2.13.4",
+    "rich>=15.0.0",
+    "typer>=0.26.7",
+]
+
+[project.scripts]
+novel-forge-kdp = "novel_forge_kdp:main"
+
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+]

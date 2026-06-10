@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["score", "strengths", "issues", "revision_brief"],
+  "properties": {
+    "score": {"type": "integer"},
+    "strengths": {"type": "array", "items": {"type": "string"}},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "point"],
+        "properties": {
+          "severity": {"type": "string"},
+          "point": {"type": "string"}
+        }
+      }
+    },
+    "revision_brief": {"type": "string"}
+  }
+}

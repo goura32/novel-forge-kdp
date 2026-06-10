@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["title", "body"],
+  "properties": {
+    "title": {"type": "string"},
+    "body": {"type": "string"},
+    "continuity_notes": {"type": "array", "items": {"type": "string"}}
+  }
+}
