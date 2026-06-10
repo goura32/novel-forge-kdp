@@ -164,12 +164,14 @@ workspace/<series-slug>/
       kdp.txt
       book.epub
       metadata.json
+      chapters/
+        chapter_001.md
 ```
 
 ## 設計方針
 
 - LLM出力は原則JSON。用途別Schemaで検証する。
-- 本文はシーン単位で生成し、レビューと改稿を必ず通す。各シーンをまとめた `chapters/chapter_NNN/chapter.md` も保存し、人間が章単位で読めるようにする。
+- 本文はシーン単位で生成し、レビューと改稿を必ず通す。各シーンをまとめた `chapters/chapter_NNN/chapter.md` と、巻改稿後の最終原稿から切り出した `exports/chapters/chapter_NNN.md` も保存し、人間が章単位で読めるようにする。
 - 巻全体でもレビューと改稿を行い、単発シーンの寄せ集めで終わらせない。
 - プロンプトはMarkdownファイルとして管理し、コード直書きを避ける。
 - RAWログは再現性・検証・プロンプト改善の材料として残す。未公開原稿とプロットが平文保存されるため、共有・公開・バックアップ時は取り扱いに注意する。

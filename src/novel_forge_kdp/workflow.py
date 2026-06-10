@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -302,6 +303,18 @@ class NovelForge:
         (exports / "kdp.txt").write_text(text.strip() + "\n", encoding="utf-8")
         (exports / "metadata.json").write_text(json.dumps({"title": title, "format": "KDP text/markdown/EPUB draft"}, ensure_ascii=False, indent=2), encoding="utf-8")
         NovelForge._write_epub(exports / "book.epub", title, clean)
+        NovelForge._write_export_chapters(exports, clean)
+
+    @staticmethod
+    def _write_export_chapters(exports: Path, manuscript: str) -> None:
+        chapter_root = ensure_dir(exports / "chapters")
+        matches = list(re.finditer(r"^##\s+.+$", manuscript, re.MULTILINE))
+        for old in chapter_root.glob("chapter_*.md"):
+            old.unlink()
+        for index, match in enumerate(matches, start=1):
+            end = matches[index].start() if index < len(matches) else len(manuscript)
+            chapter_text = manuscript[match.start():end].strip() + "\n"
+            (chapter_root / f"chapter_{index:03d}.md").write_text(chapter_text, encoding="utf-8")
 
     @staticmethod
     def _write_epub(path: Path, title: str, manuscript: str) -> None:

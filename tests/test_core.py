@@ -59,7 +59,7 @@ class FakeLLM:
         if task == "volume_review":
             return {"score": 88, "strengths": ["統一感"], "issues": [{"severity": "minor", "point": "終盤の余韻を補強"}], "revision_brief": "巻末の余韻を増やす。", "ready_for_publication": True}
         if task == "revise_volume":
-            return {"title": "夜明けの禁書", "body": "# 禁書の囁き\n\n澪は夜の図書館で、星の匂いがする本を開いた。余韻が残った。", "changes": ["巻末の余韻を補強"]}
+            return {"title": "夜明けの禁書", "body": "## 星の降る閲覧室\n\n# 禁書の囁き\n\n澪は夜の図書館で、星の匂いがする本を開いた。余韻が残った。", "changes": ["巻末の余韻を補強"]}
         if task == "bible_update":
             return {
                 "characters": [{"name": "澪", "description": "星の司書", "status": "旅立ちを決意"}],
@@ -125,6 +125,9 @@ def test_complete_volume_reviews_revises_exports_and_updates_bible(tmp_path):
     assert (volume_dir / "exports" / "manuscript.md").exists()
     assert (volume_dir / "exports" / "kdp.txt").read_text(encoding="utf-8").startswith("夜明けの禁書")
     assert (volume_dir / "exports" / "book.epub").read_bytes().startswith(b"PK")
+    exported_chapter = (volume_dir / "exports" / "chapters" / "chapter_001.md").read_text(encoding="utf-8")
+    assert exported_chapter.startswith("## 星の降る閲覧室")
+    assert "# 禁書の囁き" in exported_chapter
     bible = json.loads((series_dir / "bible.json").read_text(encoding="utf-8"))
     assert bible["characters"][0]["name"] == "澪"
 
