@@ -9,7 +9,6 @@ from typing import Any, Callable, Protocol
 
 from .paths import ensure_dir
 
-JsonWriter = Callable[[Path, dict[str, Any]], None]
 StateSaver = Callable[[Path, Any], None]
 
 
@@ -70,9 +69,8 @@ class SceneWorkflowError(RuntimeError):
 class SceneWorkflow:
     """Executes one scene through the draft -> review -> revise lifecycle."""
 
+    repository: JsonRepositoryProtocol
     llm_calls: SceneLlmCallsProtocol | MockLlmCalls | None = None
-    repository: JsonRepositoryProtocol | None = None
-    write_json: JsonWriter | None = None
     save_state: StateSaver | None = None
 
     def run(
@@ -126,7 +124,7 @@ class SceneWorkflow:
                 "body": f"Draft content for {scene.title}.",
             }
 
-        self._write_json(self._scene_dir(volume_dir, chapter) / f"scene_{scene.number:03d}.draft.json", draft_data)
+        self.repository.save_json(self._scene_dir(volume_dir, chapter) / f"scene_{scene.number:03d}.draft.json", draft_data)
         return draft_data
 
     def _review(self, *, volume_dir: Path, chapter: Any, scene: Any) -> dict[str, Any] | None:
@@ -155,7 +153,7 @@ class SceneWorkflow:
                 "overall_quality_score": 9,
             }
 
-        self._write_json(scene_dir / f"scene_{scene.number:03d}.review.json", review_result)
+        self.repository.save_json(scene_dir / f"scene_{scene.number:03d}.review.json", review_result)
         return review_result
 
     def _revise(self, *, volume_dir: Path, chapter: Any, scene: Any) -> bool:
@@ -181,22 +179,12 @@ class SceneWorkflow:
                 "body": draft_data.get("body", ""),
             }
 
-        self._write_json(scene_dir / f"scene_{scene.number:03d}.revised.json", revised_data)
+        self.repository.save_json(scene_dir / f"scene_{scene.number:03d}.revised.json", revised_data)
         self._scene_markdown_path(volume_dir, chapter, scene).write_text(
             f"# {revised_data['title']}\n\n{revised_data['body'].strip()}\n",
             encoding="utf-8",
         )
         return True
-
-    def _write_json(self, path: Path, data: dict[str, Any]) -> None:
-        if self.repository is not None:
-            self.repository.save_json(path, data)
-            return
-        if self.write_json is not None:
-            self.write_json(path, data)
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _save_state(self, series_dir: Path, state: Any) -> None:
         if self.save_state is not None:

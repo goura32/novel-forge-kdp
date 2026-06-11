@@ -1,5 +1,23 @@
 """Tests for novel_forge_kdp.scene_workflow."""
 
+import json
+
+
+class JsonTestRepository:
+    def save_json(self, path, data):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_scene_workflow_requires_repository_instead_of_write_json_callback():
+    import inspect
+
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+
+    assert "repository" in inspect.signature(SceneWorkflow).parameters
+    assert "write_json" not in inspect.signature(SceneWorkflow).parameters
+    assert not hasattr(SceneWorkflow, "_write_json")
+
 
 def test_process_creates_draft_review_revised_files(tmp_path):
     from pathlib import Path
@@ -77,7 +95,7 @@ def test_process_creates_draft_review_revised_files(tmp_path):
         review_status="ready_for_publication",
         revised={"title": "レビュー済みタイトル", "body": "修正後の本文"},
     )
-    wf = SceneWorkflow(llm_calls=mock)
+    wf = SceneWorkflow(llm_calls=mock, repository=JsonTestRepository())
 
     progress = state.volumes[0].scenes[0]
     assert progress.status == "planned"
@@ -169,7 +187,7 @@ def test_process_resumes_at_planned(tmp_path):
         volumes=[VolumeProgress(number=1, title="第一巻", scenes=[])],
     )
 
-    wf = SceneWorkflow()  # mock は使わない（テストの分岐だけ）
+    wf = SceneWorkflow(repository=JsonTestRepository())  # mock は使わない（テストの分岐だけ）
     progress = SceneProgress(chapter=1, scene=1, title="テストシーン")
     state.volumes[0].scenes.append(progress)
 
@@ -271,7 +289,7 @@ def test_process_resumes_at_drafting(tmp_path):
         review_status="ready_for_publication",
         revised={"title": "reviseタイトル", "body": "修正本文"},
     )
-    wf = SceneWorkflow(llm_calls=mock)
+    wf = SceneWorkflow(llm_calls=mock, repository=JsonTestRepository())
 
     result = wf.run(
         series_dir=series_dir,
@@ -381,7 +399,7 @@ def test_process_resumes_at_reviewing(tmp_path):
         review_status="ready_for_publication",
         revised={"title": "reviseB", "body": "本文修正B"},
     )
-    wf = SceneWorkflow(llm_calls=mock)
+    wf = SceneWorkflow(llm_calls=mock, repository=JsonTestRepository())
 
     result = wf.run(
         series_dir=series_dir,
@@ -468,7 +486,7 @@ def test_process_already_revised_returns_false(tmp_path):
     # Already revised → run() should skip everything since no step matches "revised" status
     progress.status = "revised"
 
-    wf = SceneWorkflow()
+    wf = SceneWorkflow(repository=JsonTestRepository())
     result = wf.run(
         series_dir=series_dir,
         volume_dir=volume_dir,
@@ -556,7 +574,7 @@ def test_process_stops_at_drafted_when_not_review_status(tmp_path):
         review_status=None,  # not ready
         revised={"title": "reviseC", "body": "修正C"},
     )
-    wf = SceneWorkflow(llm_calls=mock)
+    wf = SceneWorkflow(llm_calls=mock, repository=JsonTestRepository())
 
     result = wf.run(
         series_dir=series_dir,
@@ -666,7 +684,7 @@ def test_process_stops_at_reviewed_when_not_revised(tmp_path):
         review_status={"ready_for_publication": True},
         revised={"title": "reviseD", "body": "修正D"},
     )
-    wf = SceneWorkflow(llm_calls=mock)
+    wf = SceneWorkflow(llm_calls=mock, repository=JsonTestRepository())
 
     # revise_sceneが return ready=False の場合、revisedには進まないようにする
     # 今はデフォルトの動作：常に進む
