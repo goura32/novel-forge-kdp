@@ -18,6 +18,7 @@ from .repository import ProjectRepository
 from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
 from .series_planner import SeriesPlanner
 from .volume_completion_workflow import VolumeCompletionWorkflow
+from .volume_outline_workflow import VolumeOutlineWorkflow
 from .volume_writing_workflow import VolumeWritingWorkflow
 
 
@@ -99,24 +100,19 @@ class NovelForge:
         return volume
 
     def _load_or_create_outline(self, series_dir: Path, volume_dir: Path, state: ProjectState, volume: VolumeProgress, number: int) -> VolumeOutline:
-        outline_path = SeriesPaths(series_dir).volume(number).outline
-        if outline_path.exists():
-            outline = VolumeOutline.model_validate_json(outline_path.read_text(encoding="utf-8"))
-            self._validate_volume_outline(outline, number)
-            self._sync_volume_scenes(volume, outline)
-            return outline
-        outline_data = self._task_runner_for(series_dir).complete(
-            "volume_outline",
-            series=json.dumps(state.series.model_dump(), ensure_ascii=False),
-            volume_number=number,
+        return VolumeOutlineWorkflow(
+            task_runner=self._task_runner_for(series_dir),
+            repository=self.repository,
+            validate_volume_outline=self._validate_volume_outline,
+            sync_volume_scenes=self._sync_volume_scenes,
+            save_state=self._save_state,
+        ).load_or_create(
+            series_dir=series_dir,
+            volume_dir=volume_dir,
+            state=state,
+            volume=volume,
+            number=number,
         )
-        outline = VolumeOutline.model_validate(outline_data)
-        self._validate_volume_outline(outline, number)
-        self.repository.save_volume_outline(volume_dir, outline.model_dump())
-        volume.status = "outlined"
-        self._sync_volume_scenes(volume, outline)
-        self._save_state(series_dir, state)
-        return outline
 
     def _process_outline_scenes(
         self,

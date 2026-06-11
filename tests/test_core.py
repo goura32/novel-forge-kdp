@@ -161,6 +161,46 @@ def test_continue_series_revises_unfinished_or_starts_next_volume(tmp_path):
 
 
 
+def test_load_or_create_outline_delegates_to_volume_outline_workflow(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyVolumeOutlineWorkflow:
+        def __init__(self, **kwargs):
+            calls.append(("init", sorted(kwargs.keys())))
+
+        def load_or_create(self, *, series_dir, volume_dir, state, volume, number):
+            calls.append(("load_or_create", series_dir.name, volume_dir.name, number))
+            return workflow_module.VolumeOutline(
+                volume_number=number,
+                title="Spy Outline",
+                chapters=[
+                    workflow_module.ChapterPlan(
+                        number=1,
+                        title="Spy Chapter",
+                        purpose="verify delegation",
+                        scenes=[workflow_module.ScenePlan(number=1, title="Spy Scene", pov="澪", goal="g", conflict="c", outcome="o")],
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(workflow_module, "VolumeOutlineWorkflow", SpyVolumeOutlineWorkflow, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.plan_series("星 図書館")
+    volume = state.volumes[0]
+    series_dir = tmp_path / "hoshikuzu-library"
+    volume_dir = series_dir / "volume_001"
+
+    outline = forge._load_or_create_outline(series_dir, volume_dir, state, volume, 1)
+
+    assert outline.title == "Spy Outline"
+    assert calls[0][0] == "init"
+    assert calls[0][1] == ["repository", "save_state", "sync_volume_scenes", "task_runner", "validate_volume_outline"]
+    assert calls[1] == ("load_or_create", "hoshikuzu-library", "volume_001", 1)
+
+
 def test_write_volume_delegates_to_volume_writing_workflow(tmp_path, monkeypatch):
     import novel_forge_kdp.workflow as workflow_module
 
