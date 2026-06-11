@@ -106,6 +106,17 @@ uv run novel-forge-kdp complete-volume <series-slug>
 uv run novel-forge-kdp status <series-slug>
 ```
 
+## 共通CLIオプション
+
+LLMを使うコマンドでは、必要に応じて以下を指定できます。
+
+- `--workspace PATH`: シリーズ作業フォルダの親。既定は `workspace`
+- `--ollama-url URL`: Ollama OpenAI互換APIのURL。既定は `http://ws1.local:11434`
+- `--model MODEL`: 使用モデル名。既定は `qwen3.6:35b-a3b-mtp-q4_K_M`
+- `--timeout SECONDS`: LLMリクエストのタイムアウト秒数。既定は `3600`
+
+LLMを使わない `status` と `export-volume` は `--workspace` と `--volume` だけを扱います。
+
 ## CLIコマンド
 
 ### `probe-model`
@@ -127,7 +138,7 @@ uv run novel-forge-kdp probe-model [--ollama-url URL] [--model MODEL] [--timeout
 キーワードからシリーズ企画を生成し、`workspace/<slug>/` を作成します。
 
 ```bash
-uv run novel-forge-kdp plan-series "キーワード" [--workspace workspace]
+uv run novel-forge-kdp plan-series "キーワード" [--workspace PATH] [--ollama-url URL] [--model MODEL] [--timeout SECONDS]
 ```
 
 生成物:
@@ -143,7 +154,7 @@ uv run novel-forge-kdp plan-series "キーワード" [--workspace workspace]
 指定シリーズの巻アウトライン、シーン初稿、シーンレビュー、シーン改稿、章Markdownを生成します。
 
 ```bash
-uv run novel-forge-kdp write-volume <series-slug> [--volume N] [--max-scenes N]
+uv run novel-forge-kdp write-volume <series-slug> [--workspace PATH] [--volume N] [--max-scenes N] [--ollama-url URL] [--model MODEL] [--timeout SECONDS]
 ```
 
 `--max-scenes` はスモーク検証用です。通常運用では未指定にします。
@@ -153,7 +164,7 @@ uv run novel-forge-kdp write-volume <series-slug> [--volume N] [--max-scenes N]
 巻全体レビュー、巻全体改稿、必要に応じた改稿後再レビュー、シリーズ台帳更新、KDP向け出力を実行します。
 
 ```bash
-uv run novel-forge-kdp complete-volume <series-slug> [--volume N]
+uv run novel-forge-kdp complete-volume <series-slug> [--workspace PATH] [--volume N] [--force] [--ollama-url URL] [--model MODEL] [--timeout SECONDS]
 ```
 
 品質ゲートに失敗した場合、改稿済み原稿は保存したうえで標準では停止します。検証目的でどうしても出力したい場合のみ `--force` を指定します。
@@ -167,7 +178,7 @@ uv run novel-forge-kdp complete-volume <series-slug> --force
 現在巻が未完了なら完成処理を行い、現在巻が完成済みなら次巻を生成します。
 
 ```bash
-uv run novel-forge-kdp continue-series <series-slug>
+uv run novel-forge-kdp continue-series <series-slug> [--workspace PATH] [--ollama-url URL] [--model MODEL] [--timeout SECONDS]
 ```
 
 計画巻数を超える続巻生成は拒否します。
@@ -177,7 +188,7 @@ uv run novel-forge-kdp continue-series <series-slug>
 既存の改稿済み原稿からKDP向け出力だけを再生成します。
 
 ```bash
-uv run novel-forge-kdp export-volume <series-slug> [--volume N]
+uv run novel-forge-kdp export-volume <series-slug> [--workspace PATH] [--volume N]
 ```
 
 ### `status`
@@ -185,7 +196,7 @@ uv run novel-forge-kdp export-volume <series-slug> [--volume N]
 `state.json` を読み、現在の進捗をJSONで表示します。
 
 ```bash
-uv run novel-forge-kdp status <series-slug>
+uv run novel-forge-kdp status <series-slug> [--workspace PATH]
 ```
 
 ## 作業フォルダ構造
