@@ -409,6 +409,44 @@ def test_complete_volume_uses_task_runner_for_volume_review_revise_and_bible(tmp
 
 
 
+def test_safe_series_file_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyManuscriptAssembler:
+        def safe_series_file(self, series_dir, relative_path):
+            calls.append((series_dir.name, relative_path))
+            return series_dir / "safe.md"
+
+    monkeypatch.setattr(workflow_module, "ManuscriptAssembler", SpyManuscriptAssembler, raising=False)
+
+    result = NovelForge._safe_series_file(tmp_path / "series", "scene.md")
+
+    assert result == tmp_path / "series" / "safe.md"
+    assert calls == [("series", "scene.md")]
+
+
+def test_assemble_volume_manuscript_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyManuscriptAssembler:
+        def assemble_volume(self, *, series_dir, volume):
+            calls.append(("assemble_volume", series_dir.name, volume.number))
+            return "# Spy Manuscript\n\nBody.\n"
+
+    monkeypatch.setattr(workflow_module, "ManuscriptAssembler", SpyManuscriptAssembler, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.plan_series("星 図書館")
+    manuscript = forge._assemble_volume_manuscript(tmp_path / "hoshikuzu-library", state.volumes[0])
+
+    assert manuscript == "# Spy Manuscript\n\nBody.\n"
+    assert calls == [("assemble_volume", "hoshikuzu-library", 1)]
+
+
 def test_complete_volume_delegates_to_volume_completion_workflow(tmp_path, monkeypatch):
     import novel_forge_kdp.workflow as workflow_module
 

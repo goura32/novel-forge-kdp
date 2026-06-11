@@ -9,6 +9,7 @@ from .artifact_paths import SeriesPaths
 from .exporter import KdpExporter, chapter_heading_count, write_epub, write_export_chapters
 from .llm import OllamaOpenAIClient
 from .llm_task_runner import LLMTaskRunner
+from .manuscript_assembler import ManuscriptAssembler, ManuscriptAssemblyError
 from .models import ChapterPlan, ProjectState, ScenePlan, SceneProgress, SeriesPlan, VolumeOutline, VolumeProgress
 from .outline_validation import OutlineValidationError, validate_volume_outline
 from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
@@ -165,14 +166,10 @@ class NovelForge:
 
     @staticmethod
     def _safe_series_file(series_dir: Path, relative_path: str) -> Path:
-        candidate_raw = Path(relative_path)
-        if candidate_raw.is_absolute():
-            raise NovelForgeError(f"scene manuscript path escapes series directory: {relative_path}")
-        root = series_dir.resolve()
-        candidate = (root / candidate_raw).resolve()
-        if root != candidate and root not in candidate.parents:
-            raise NovelForgeError(f"scene manuscript path escapes series directory: {relative_path}")
-        return candidate
+        try:
+            return ManuscriptAssembler().safe_series_file(series_dir, relative_path)
+        except PathSafetyError as exc:
+            raise NovelForgeError(str(exc)) from exc
 
     @staticmethod
     def _validate_volume_outline(outline: VolumeOutline, expected_number: int) -> None:
@@ -306,22 +303,10 @@ class NovelForge:
         return volume_dir / "exports" / "manuscript.md"
 
     def _assemble_volume_manuscript(self, series_dir: Path, volume: VolumeProgress) -> str:
-        parts = [f"# {volume.title}"]
-        for scene in sorted(volume.scenes, key=lambda s: (s.chapter, s.scene)):
-            if scene.status != "revised":
-                raise NovelForgeError(f"scene is not revised: chapter={scene.chapter} scene={scene.scene}")
-            if scene.path is None:
-                raise NovelForgeError(f"missing scene manuscript path: chapter={scene.chapter} scene={scene.scene}")
-            scene_path = self._safe_series_file(series_dir, scene.path)
-            if not scene_path.exists():
-                raise NovelForgeError(f"missing scene manuscript: {scene.path}")
-            text = scene_path.read_text(encoding="utf-8").strip()
-            if not text:
-                raise NovelForgeError(f"empty scene manuscript: {scene.path}")
-            parts.append(text)
-        if len(parts) == 1:
-            raise NovelForgeError(f"volume has no revised scenes: volume={volume.number}")
-        return "\n\n".join(parts).strip() + "\n"
+        try:
+            return ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
+        except (ManuscriptAssemblyError, PathSafetyError) as exc:
+            raise NovelForgeError(str(exc)) from exc
 
     def _update_bible(self, series_dir: Path, manuscript: str) -> None:
         bible_path = SeriesPaths(series_dir).bible
