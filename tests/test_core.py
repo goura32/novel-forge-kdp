@@ -409,6 +409,46 @@ def test_complete_volume_uses_task_runner_for_volume_review_revise_and_bible(tmp
     assert "existing_bible" in calls[2][1]
 
 
+def test_complete_volume_uses_volume_completion_llm_calls(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyCompletionLlmCalls:
+        def __init__(self, **kwargs):
+            calls.append(("llm_init", sorted(kwargs.keys())))
+
+        def review_volume(self, series_dir, state, manuscript):
+            calls.append(("review_volume", series_dir.name))
+            return FakeLLM().complete_json(task="volume_review", messages=[], schema={})
+
+        def revise_volume(self, series_dir, manuscript, review, expected_chapter_count):
+            calls.append(("revise_volume", series_dir.name, expected_chapter_count))
+            return FakeLLM().complete_json(task="revise_volume", messages=[], schema={})
+
+        def final_review_if_needed(self, series_dir, volume_dir, state, review, revised_md):
+            calls.append(("final_review_if_needed", volume_dir.name))
+            return review
+
+        def update_bible(self, series_dir, manuscript):
+            calls.append(("update_bible", series_dir.name))
+
+    monkeypatch.setattr(workflow_module, "VolumeCompletionLlmCalls", SpyCompletionLlmCalls, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+
+    forge.complete_volume("hoshikuzu-library")
+
+    assert calls[0] == ("llm_init", ["repository", "runner"])
+    assert [call[0] for call in calls[1:]] == [
+        "review_volume",
+        "revise_volume",
+        "final_review_if_needed",
+        "update_bible",
+    ]
+
 
 def test_continue_series_delegates_to_series_continuation_workflow(tmp_path, monkeypatch):
     import novel_forge_kdp.workflow as workflow_module

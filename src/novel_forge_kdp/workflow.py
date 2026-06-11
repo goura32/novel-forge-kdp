@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,7 @@ from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
 from .series_continuation_workflow import SeriesContinuationWorkflow
 from .series_planner import SeriesPlanner
 from .outline_scene_processor import OutlineSceneProcessor
-from .volume_completion_workflow import VolumeCompletionWorkflow
+from .volume_completion_workflow import VolumeCompletionLlmCalls, VolumeCompletionLlmCallsError, VolumeCompletionWorkflow
 from .volume_export_workflow import VolumeExportWorkflow, VolumeExportWorkflowError
 from .volume_outline_workflow import VolumeOutlineWorkflow
 from .volume_writing_workflow import VolumeWritingWorkflow
@@ -208,25 +207,32 @@ class NovelForge:
         volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
         manuscript = assemble_volume_manuscript_for_forge(series_dir, volume)
         outline = self._load_validated_outline(volume_dir, number)
-        return VolumeCompletionWorkflow(
-            review_volume=self._review_volume,
-            revise_volume=self._revise_volume,
-            final_review_if_needed=self._final_review_if_needed,
-            ensure_publication_allowed=self._ensure_publication_allowed,
-            update_bible=self._update_bible,
-            export_kdp=self._export_kdp,
-            save_state=self._save_state,
-            save_volume_review=self.repository.save_volume_review,
-            save_volume_revised=self.repository.save_volume_revised,
-        ).run(
-            series_dir=series_dir,
-            volume_dir=volume_dir,
-            state=state,
-            volume=volume,
-            outline=outline,
-            manuscript=manuscript,
-            force=force,
+        llm_calls = VolumeCompletionLlmCalls(
+            runner=self._task_runner_for(series_dir),
+            repository=self.repository,
         )
+        try:
+            return VolumeCompletionWorkflow(
+                review_volume=llm_calls.review_volume,
+                revise_volume=llm_calls.revise_volume,
+                final_review_if_needed=llm_calls.final_review_if_needed,
+                ensure_publication_allowed=self._ensure_publication_allowed,
+                update_bible=llm_calls.update_bible,
+                export_kdp=self._export_kdp,
+                save_state=self._save_state,
+                save_volume_review=self.repository.save_volume_review,
+                save_volume_revised=self.repository.save_volume_revised,
+            ).run(
+                series_dir=series_dir,
+                volume_dir=volume_dir,
+                state=state,
+                volume=volume,
+                outline=outline,
+                manuscript=manuscript,
+                force=force,
+            )
+        except VolumeCompletionLlmCallsError as exc:
+            raise NovelForgeError(str(exc)) from exc
 
     def _ensure_revised_scenes(self, slug: str, state: ProjectState, number: int) -> tuple[ProjectState, VolumeProgress]:
         volume = next((v for v in state.volumes if v.number == number), None)
@@ -239,33 +245,6 @@ class NovelForge:
         outline = VolumeOutline.model_validate_json((volume_dir / "outline.json").read_text(encoding="utf-8"))
         self._validate_volume_outline(outline, number)
         return outline
-
-    def _review_volume(self, series_dir: Path, state: ProjectState, manuscript: str) -> dict[str, Any]:
-        return self._task_runner_for(series_dir).complete(
-            "volume_review",
-            series=state.series.model_dump_json(),
-            manuscript=manuscript,
-        )
-
-    def _revise_volume(self, series_dir: Path, manuscript: str, review: dict[str, Any], expected_chapter_count: int) -> dict[str, Any]:
-        revised = self._task_runner_for(series_dir).complete(
-            "revise_volume",
-            manuscript=manuscript,
-            review=json.dumps(review, ensure_ascii=False),
-            chapter_count=expected_chapter_count,
-        )
-        try:
-            QualityGate().ensure_revised_volume_structure(revised["body"], expected_chapter_count)
-        except QualityGateError as exc:
-            raise NovelForgeError(str(exc)) from exc
-        return revised
-
-    def _final_review_if_needed(self, series_dir: Path, volume_dir: Path, state: ProjectState, review: dict[str, Any], revised_md: str) -> dict[str, Any]:
-        if review.get("ready_for_publication", False):
-            return review
-        final_review = self._review_volume(series_dir, state, revised_md)
-        self.repository.save_volume_review(volume_dir, final_review, final=True)
-        return final_review
 
     def _ensure_publication_allowed(self, series_dir: Path, state: ProjectState, volume: VolumeProgress, final_review: dict[str, Any], force: bool) -> None:
         try:
@@ -306,16 +285,6 @@ class NovelForge:
             ).run(series_dir=series_dir, state=state, volume_number=volume_number)
         except VolumeExportWorkflowError as exc:
             raise NovelForgeError(str(exc)) from exc
-
-    def _update_bible(self, series_dir: Path, manuscript: str) -> None:
-        bible_path = SeriesPaths(series_dir).bible
-        existing = bible_path.read_text(encoding="utf-8") if bible_path.exists() else "{}"
-        bible = self._task_runner_for(series_dir).complete(
-            "bible_update",
-            existing_bible=existing,
-            manuscript=manuscript,
-        )
-        self.repository.save_bible(series_dir, bible)
 
     @staticmethod
     def _export_kdp(volume_dir: Path, title: str, manuscript: str) -> None:
