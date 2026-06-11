@@ -145,7 +145,7 @@ class NovelForge:
     def _process_scene(self, series_dir: Path, volume_dir: Path, state: ProjectState, outline: VolumeOutline, chapter: ChapterPlan, scene: ScenePlan, progress: SceneProgress) -> bool:
         result = SceneWorkflow(
             llm_calls=SceneLlmCalls(runner=self._task_runner_for(series_dir)),
-            write_json=self._write_json,
+            repository=self.repository,
             save_state=self._save_state,
         ).run(
             series_dir=series_dir,

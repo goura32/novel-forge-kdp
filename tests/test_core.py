@@ -260,6 +260,7 @@ def test_write_volume_process_scene_delegates_to_scene_workflow(tmp_path, monkey
     state = forge.write_volume("hoshikuzu-library", max_scenes=1)
 
     assert calls[0][0] == "init"
+    assert sorted(calls[0][2].keys()) == ["llm_calls", "repository", "save_state"]
     assert calls[1] == ("run", 1, 1, "planned")
     assert state.volumes[0].scenes[0].status == "revised"
     assert (tmp_path / "hoshikuzu-library" / "volume_001" / "chapters" / "chapter_001" / "scene_001.md").read_text(encoding="utf-8").startswith("# Spy Scene")

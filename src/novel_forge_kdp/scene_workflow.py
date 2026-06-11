@@ -21,6 +21,10 @@ class SceneLlmCallsProtocol(Protocol):
     def revise(self, *, draft_text: str, review_text: str) -> dict[str, Any] | None: ...
 
 
+class JsonRepositoryProtocol(Protocol):
+    def save_json(self, path: Path, data: dict[str, Any]) -> None: ...
+
+
 @dataclass(frozen=True)
 class SceneLlmCalls:
     """Production LLM calls for scene drafting, reviewing, and revision."""
@@ -67,6 +71,7 @@ class SceneWorkflow:
     """Executes one scene through the draft -> review -> revise lifecycle."""
 
     llm_calls: SceneLlmCallsProtocol | MockLlmCalls | None = None
+    repository: JsonRepositoryProtocol | None = None
     write_json: JsonWriter | None = None
     save_state: StateSaver | None = None
 
@@ -184,6 +189,9 @@ class SceneWorkflow:
         return True
 
     def _write_json(self, path: Path, data: dict[str, Any]) -> None:
+        if self.repository is not None:
+            self.repository.save_json(path, data)
+            return
         if self.write_json is not None:
             self.write_json(path, data)
             return
