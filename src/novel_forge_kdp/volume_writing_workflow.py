@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .artifact_paths import SeriesPaths
 from .models import ChapterPlan, ProjectState, VolumeOutline, VolumeProgress
@@ -14,13 +15,13 @@ class VolumeWritingWorkflow:
         *,
         ensure_volume_progress: Callable[[ProjectState, int], VolumeProgress],
         load_or_create_outline: Callable[[Path, Path, ProjectState, VolumeProgress, int], VolumeOutline],
-        process_outline_scenes: Callable[[Path, Path, ProjectState, VolumeProgress, VolumeOutline, int | None], bool],
+        outline_scene_processor: Any,
         write_chapter_markdown: Callable[[Path, ChapterPlan], None],
         save_state: Callable[[Path, ProjectState], None],
     ) -> None:
         self.ensure_volume_progress = ensure_volume_progress
         self.load_or_create_outline = load_or_create_outline
-        self.process_outline_scenes = process_outline_scenes
+        self.outline_scene_processor = outline_scene_processor
         self.write_chapter_markdown = write_chapter_markdown
         self.save_state = save_state
 
@@ -37,7 +38,14 @@ class VolumeWritingWorkflow:
         volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
         outline = self.load_or_create_outline(series_dir, volume_dir, state, volume, number)
 
-        if self.process_outline_scenes(series_dir, volume_dir, state, volume, outline, max_scenes):
+        if self.outline_scene_processor.process(
+            series_dir=series_dir,
+            volume_dir=volume_dir,
+            state=state,
+            outline=outline,
+            volume=volume,
+            max_scenes=max_scenes,
+        ):
             return state
         for chapter in outline.chapters:
             self.write_chapter_markdown(volume_dir, chapter)

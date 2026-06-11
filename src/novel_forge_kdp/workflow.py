@@ -79,7 +79,10 @@ class NovelForge:
         return VolumeWritingWorkflow(
             ensure_volume_progress=self._ensure_volume_progress,
             load_or_create_outline=self._load_or_create_outline,
-            process_outline_scenes=self._process_outline_scenes,
+            outline_scene_processor=OutlineSceneProcessor(
+                process_scene=self._process_scene,
+                save_state=self._save_state,
+            ),
             write_chapter_markdown=self._write_chapter_markdown,
             save_state=self._save_state,
         ).run(

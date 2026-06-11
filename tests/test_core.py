@@ -226,7 +226,7 @@ def test_write_volume_delegates_to_volume_writing_workflow(tmp_path, monkeypatch
     assert calls[0][1] == [
         "ensure_volume_progress",
         "load_or_create_outline",
-        "process_outline_scenes",
+        "outline_scene_processor",
         "save_state",
         "write_chapter_markdown",
     ]
@@ -485,6 +485,30 @@ def test_process_outline_scenes_delegates_to_outline_scene_processor(tmp_path, m
     assert calls[0][0] == "init"
     assert calls[0][1] == ["process_scene", "save_state"]
     assert calls[1] == ("process", "hoshikuzu-library", len(outline.chapters), 1, 1)
+
+
+def test_write_volume_injects_outline_scene_processor_into_volume_writing_workflow(tmp_path, monkeypatch):
+    """write_volume は OutlineSceneProcessor を VolumeWritingWorkflow に注入するべき"""
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyOutlineSceneProcessor:
+        def __init__(self, **kwargs):
+            calls.append(("__init__", sorted(kwargs.keys())))
+
+        def process(self, *, series_dir, volume_dir, state, outline, volume, max_scenes):
+            calls.append(("process", series_dir.name))
+            return False
+
+    monkeypatch.setattr(workflow_module, "OutlineSceneProcessor", SpyOutlineSceneProcessor, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+
+    assert any(c[0] == "__init__" for c in calls), \
+        "write_volume should inject OutlineSceneProcessor, not a raw process callback"
 
 
 def test_safe_series_file_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
