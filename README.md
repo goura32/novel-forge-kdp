@@ -46,6 +46,7 @@ flowchart TD
 ## ドキュメント
 
 - `README.md`: 機能概要、セットアップ、CLI、設計方針
+- `docs/SPECIFICATION.md`: 実装レベルに踏み込まない詳細仕様書
 - `docs/OPERATIONS.md`: 実モデル運用の手順、品質ゲート失敗時対応、リリース前チェック
 
 ## セットアップ
