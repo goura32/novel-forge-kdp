@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from novel_forge_kdp.cli import app
 from novel_forge_kdp.llm import LLMClientError, OllamaOpenAIClient, build_chat_payload
+from novel_forge_kdp.repository import ProjectRepository
 from novel_forge_kdp.workflow import NovelForge, NovelForgeError
 from novel_forge_kdp.models import VolumeProgress
 
@@ -24,6 +25,14 @@ from tests.fakes import (
     TitleChangingLLM,
     TooManyChapterHeadingsRevisedVolumeLLM,
 )
+
+
+def write_json(path: Path, data: dict) -> None:
+    ProjectRepository().save_json(path, data)
+
+
+def test_novelforge_no_longer_exposes_json_writer_helper():
+    assert not hasattr(NovelForge, "_write_json")
 
 def test_slug_traversal_is_rejected(tmp_path):
     forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
@@ -66,7 +75,7 @@ def test_write_volume_rejects_cached_outline_over_workload_bounds(tmp_path):
     forge.plan_series("星 図書館")
     volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
     volume_dir.mkdir()
-    NovelForge._write_json(
+    write_json(
         volume_dir / "outline.json",
         {
             "volume_number": 1,
@@ -87,7 +96,7 @@ def test_write_volume_rejects_cached_outline_with_no_chapters(tmp_path):
     forge.plan_series("星 図書館")
     volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
     volume_dir.mkdir()
-    NovelForge._write_json(volume_dir / "outline.json", {"volume_number": 1, "title": "Empty", "chapters": []})
+    write_json(volume_dir / "outline.json", {"volume_number": 1, "title": "Empty", "chapters": []})
 
     with pytest.raises(NovelForgeError, match="outline has no chapters"):
         forge.write_volume("hoshikuzu-library")
@@ -98,7 +107,7 @@ def test_write_volume_rejects_cached_outline_with_empty_chapter(tmp_path):
     forge.plan_series("星 図書館")
     volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
     volume_dir.mkdir()
-    NovelForge._write_json(volume_dir / "outline.json", {"volume_number": 1, "title": "Empty", "chapters": [{"number": 1, "title": "Empty", "purpose": "p", "scenes": []}]})
+    write_json(volume_dir / "outline.json", {"volume_number": 1, "title": "Empty", "chapters": [{"number": 1, "title": "Empty", "purpose": "p", "scenes": []}]})
 
     with pytest.raises(NovelForgeError, match="chapter has no scenes"):
         forge.write_volume("hoshikuzu-library")
@@ -109,7 +118,7 @@ def test_continue_series_refuses_unplanned_volume_past_series_cap(tmp_path):
     forge.plan_series("星 図書館")
     state = forge.status("hoshikuzu-library")
     state.current_volume = 4
-    NovelForge._write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
+    write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
 
     with pytest.raises(NovelForgeError, match="volume exceeds planned series"):
         forge.continue_series("hoshikuzu-library")
@@ -121,7 +130,7 @@ def test_continue_series_refuses_to_advance_beyond_last_planned_volume(tmp_path)
     state = forge.status("hoshikuzu-library")
     state.current_volume = len(state.series.planned_volumes)
     state.volumes = [VolumeProgress(number=state.current_volume, title="最終巻", status="revised")]
-    NovelForge._write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
+    write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
 
     with pytest.raises(NovelForgeError, match="volume exceeds planned series"):
         forge.continue_series("hoshikuzu-library")
@@ -137,8 +146,8 @@ def test_write_volume_refuses_unplanned_volume_number(tmp_path):
 
 def test_atomic_json_write_keeps_backup(tmp_path):
     path = tmp_path / "state.json"
-    NovelForge._write_json(path, {"version": 1})
-    NovelForge._write_json(path, {"version": 2})
+    write_json(path, {"version": 1})
+    write_json(path, {"version": 2})
     assert json.loads(path.read_text(encoding="utf-8")) == {"version": 2}
     assert json.loads(path.with_suffix(".json.bak").read_text(encoding="utf-8")) == {"version": 1}
 
@@ -161,7 +170,7 @@ def test_complete_volume_rejects_scene_path_traversal(tmp_path):
     outside.write_text("SECRET", encoding="utf-8")
     state = forge.status("hoshikuzu-library")
     state.volumes[0].scenes[0].path = "../secret.txt"
-    NovelForge._write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
+    write_json(tmp_path / "hoshikuzu-library" / "state.json", state.model_dump())
     with pytest.raises(NovelForgeError, match="escapes series directory"):
         forge.complete_volume("hoshikuzu-library")
 

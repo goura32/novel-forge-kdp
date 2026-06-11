@@ -5,7 +5,7 @@ from pathlib import Path
 
 from novel_forge_kdp.models import Character, PlannedVolume, ProjectState, SceneProgress, SeriesPlan, VolumeProgress, World
 from novel_forge_kdp.paths import safe_child_dir
-from novel_forge_kdp.workflow import NovelForge
+from novel_forge_kdp.repository import ProjectRepository
 
 
 def build_smoke_workspace(root: Path, slug: str) -> Path:
@@ -36,8 +36,9 @@ def build_smoke_workspace(root: Path, slug: str) -> Path:
             )
         ],
     )
-    NovelForge._write_json(series_dir / "series_plan.json", series.model_dump())
-    NovelForge._write_json(series_dir / "state.json", state.model_dump())
+    repository = ProjectRepository()
+    repository.save_series_plan(series_dir, series.model_dump())
+    repository.save_state(series_dir, state)
     (scene_dir / "scene_001.md").write_text(
         "# 落ちた星\n\nミナは煙突の影で、ひび割れた小さな星を拾った。星はまだ温かく、彼女の掌でかすかに瞬いていた。\n",
         encoding="utf-8",
