@@ -17,6 +17,7 @@ from .prompts import PromptStore
 from .quality import QualityGate, QualityGateError, review_has_blocking_issues
 from .repository import ProjectRepository
 from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
+from .series_continuation_workflow import SeriesContinuationWorkflow
 from .series_planner import SeriesPlanner
 from .volume_completion_workflow import VolumeCompletionWorkflow
 from .volume_outline_workflow import VolumeOutlineWorkflow
@@ -269,17 +270,16 @@ class NovelForge:
             raise NovelForgeError(str(exc)) from exc
 
     def continue_series(self, slug: str) -> ProjectState:
-        state = self.status(slug)
-        self._ensure_planned_volume_number(state, state.current_volume)
-        current = self._find_volume(state, state.current_volume)
-        if current is None or current.status != "revised":
-            return self.complete_volume(slug, state.current_volume)
-        next_number = state.current_volume + 1
-        self._ensure_planned_volume_number(state, next_number)
-        state.current_volume = next_number
-        self._ensure_volume_progress(state, next_number)
-        self._save_state(self._series_dir(slug), state)
-        return self.write_volume(slug, next_number)
+        return SeriesContinuationWorkflow(
+            status=self.status,
+            complete_volume=self.complete_volume,
+            write_volume=self.write_volume,
+            series_dir_for=self._series_dir,
+            save_state=self._save_state,
+            find_volume=self._find_volume,
+            ensure_planned_volume_number=self._ensure_planned_volume_number,
+            ensure_volume_progress=self._ensure_volume_progress,
+        ).continue_series(slug=slug)
 
     @staticmethod
     def _find_volume(state: ProjectState, number: int) -> VolumeProgress | None:

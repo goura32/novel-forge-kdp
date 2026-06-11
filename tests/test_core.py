@@ -409,6 +409,44 @@ def test_complete_volume_uses_task_runner_for_volume_review_revise_and_bible(tmp
 
 
 
+def test_continue_series_delegates_to_series_continuation_workflow(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpySeriesContinuationWorkflow:
+        def __init__(self, **kwargs):
+            calls.append(("init", sorted(kwargs.keys())))
+
+        def continue_series(self, *, slug):
+            calls.append(("continue_series", slug))
+            state = workflow_module.ProjectState(
+                series=workflow_module.SeriesPlan.model_validate(FakeLLM().complete_json(task="series_plan", messages=[], schema={})),
+                volumes=[],
+            )
+            state.series.slug = slug
+            return state
+
+    monkeypatch.setattr(workflow_module, "SeriesContinuationWorkflow", SpySeriesContinuationWorkflow, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.continue_series("hoshikuzu-library")
+
+    assert state.series.slug == "hoshikuzu-library"
+    assert calls[0][0] == "init"
+    assert calls[0][1] == [
+        "complete_volume",
+        "ensure_planned_volume_number",
+        "ensure_volume_progress",
+        "find_volume",
+        "save_state",
+        "series_dir_for",
+        "status",
+        "write_volume",
+    ]
+    assert calls[1] == ("continue_series", "hoshikuzu-library")
+
+
 def test_safe_series_file_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
     import novel_forge_kdp.workflow as workflow_module
 
