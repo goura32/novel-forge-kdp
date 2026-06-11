@@ -1,142 +1,191 @@
 # novel-forge-kdp
 
-ローカルLLM（Ollama OpenAI互換API）を使って、小説を「シリーズ > 巻 > 章 > シーン」で企画・設計・執筆・レビュー・改稿・出力するPython製ツールです。
+ローカルLLM（Ollama OpenAI互換API）を使って、小説を「シリーズ > 巻 > 章 > シーン」で企画・設計・執筆・レビュー・改稿・出力するPython製CLIツールです。
 
-目標は、KDPで商用出版できる品質の小説制作を支援することです。モデル能力による品質限界は残りますが、ツール側では以下を担保します。
+目的は、KDPで商用出版するためのドラフト制作を、再開可能で検証しやすいワークフローにすることです。モデル能力による文学的品質の限界は残りますが、ツール側ではJSON Schema検証、品質ゲート、状態保存、RAWログ、KDP向け出力を提供します。
 
-- 本文生成の最小単位をシーンに固定
-- シリーズごとの作業フォルダ分離
-- JSON Schema付きのJSON出力
-- LLM入出力RAWログ保存
-- Markdownプロンプト管理
+## 特長
+
+- シリーズ企画から巻単位の執筆、レビュー、改稿、KDP向け出力までをCLIで実行
+- 本文生成の最小単位をシーンに固定し、章・巻単位へ段階的に統合
+- JSON Schema付きのLLM出力検証
+- Ollama OpenAI互換APIの `response_format={"type":"json_object"}` に対応
+- thinkingモデル対策として `think: false` を送信
+- Markdown code fence付きJSONや `{result: ...}` 形式など、実モデルで出がちなJSON揺れを限定的に補正
 - `state.json` による中断・再開
-- シーン、巻、シリーズ台帳のレビュー・改稿
-- シリーズ台帳にキャラクターアーク・関係変化・テーマ進行度を記録・更新
-- Markdown / text / EPUB のKDP向けドラフト出力
-- 完成済み巻なら次巻へ進み、未完了なら再開・改稿する自律継続
-- slug安全化、既存シリーズ衝突拒否、atomic write + `.bak` によるデータ保全
-- 出版準備判定に基づく品質ゲート（`--force` 指定時のみ強制出力）
+- `raw_logs/*.json` にLLMリクエスト/レスポンスを保存
+- `bible.json` にキャラクター、用語、伏線、継続性メモを蓄積
+- `manuscript.md`, `kdp.txt`, `book.epub`, `metadata.json`, 章別Markdownを生成
+- slug安全化、パストラバーサル拒否、既存シリーズ衝突拒否
+- atomic write + `.bak` による状態ファイル保護
+- 出版準備判定と重大issue検出による品質ゲート
+- `--force` 指定時のみ品質ゲートを越えて検証用出力
 
-## 実測済みモデル挙動
+## ワークフロー
 
-対象:
+```mermaid
+flowchart TD
+    A[キーワード入力] --> B[plan-series]
+    B --> C[series_plan.json / state.json]
+    C --> D[write-volume]
+    D --> E[volume outline]
+    E --> F[scene draft]
+    F --> G[scene review]
+    G --> H[scene revision]
+    H --> I[chapter.md]
+    I --> J[complete-volume]
+    J --> K[volume review]
+    K --> L[volume revision]
+    L --> M[final quality gate]
+    M -->|pass| N[bible update]
+    N --> O[KDP exports]
+    M -->|fail| P[停止: revised draft saved]
+    P -->|必要時のみ --force| O
+```
 
-- Ollama URL: `http://ws1.local:11434`
-- API: `/v1/chat/completions`
-- Model: `qwen3.6:35b-a3b-mtp-q4_K_M`
-- 想定 context length: `131072`
-- 想定 max tokens: `24576`
-- ツール側 timeout: `3600s`
+## ドキュメント
 
-設計前に `/tmp/ollama_probe.py` で実測しました。
-
-- JSON出力: `response_format={"type":"json_object"}` と「JSONのみ」指示で、素直なJSONを返す。短いシリーズ企画は `42.18s`、JSON parse成功。
-- 長文入力: 約2万字級の設定入力 + 章立てJSON生成は `88.23s`、JSON parse成功。
-- 存在しないモデル: HTTP 404、本文は `model 'definitely-missing-model' not found`。
-- 短すぎるクライアントtimeout: `TimeoutError`。
-
-設計への反映:
-
-- すべてのLLM呼び出しに1時間timeoutを設定
-- HTTPエラー、timeout、JSON parse失敗、Schema検証失敗を明示例外化
-- `raw_logs/*.json` にrequest/responseを保存
-- JSONがMarkdown code fenceで返った場合だけ安全に剥がす
-- Schemaをプロンプト末尾にも添付して、OpenAI互換 `response_format` だけに依存しない
-- よくある `{result: ...}` / `{series: ...}` 形式の外側コンテナはSchema検証前に安全にunwrap
-- シーン単位・巻単位で状態保存し、途中失敗しても再開可能にする
-- `state.json` などの重要JSONは一時ファイルに書いてから置換し、直前ファイルを `.bak` として残す
-- LLMがHTTP 200で非JSONを返した場合も `LLMClientError` として明示する
-
-## 実装範囲
-
-実装済みCLI:
-
-- `probe-model`: モデル接続・JSON応答確認
-- `plan-series`: キーワードからシリーズ企画を生成
-- `write-volume`: 1巻分のアウトライン生成、各シーン初稿、レビュー、改稿、シーン/章単位Markdown本文出力
-- `complete-volume`: 巻全体レビュー、巻全体改稿、必要に応じた改稿後再レビュー、シリーズ台帳更新、KDP向けドラフト出力。改稿後も出版準備未完了なら停止し、必要な場合のみ `--force` で強制出力
-- `continue-series`: 新規/途中なら現巻を完成、完成済みなら次巻を作成
-- `export-volume`: 既存原稿からKDP向けファイルを再出力
-- `status`: `state.json` の進捗確認
-
-実装済み設計要素:
-
-- Markdownプロンプト: `src/novel_forge_kdp/prompts/*.md`
-- JSON Schema: `src/novel_forge_kdp/schemas/*.json`
-- RAWログ: `raw_logs/*.json`
-- シリーズ台帳: `bible.json`
-- KDP向け出力: `exports/manuscript.md`, `exports/kdp.txt`, `exports/book.epub`, `exports/metadata.json`
-- TDDによるコア動作テスト
+- `README.md`: 機能概要、セットアップ、CLI、設計方針
+- `docs/OPERATIONS.md`: 実モデル運用の手順、品質ゲート失敗時対応、リリース前チェック
 
 ## セットアップ
 
+Python 3.14以上が必要です。
+
 ```bash
 uv sync
-```
-
-Python 3.14 を使用します。
-
-```bash
 uv run python --version
 ```
 
-## 使い方
+Ollama側にはOpenAI互換APIが必要です。既定値は以下です。
 
-モデル接続確認:
+- Base URL: `http://ws1.local:11434`
+- Model: `qwen3.6:35b-a3b-mtp-q4_K_M`
+- Timeout: `3600s`
+- Max tokens: `24576`
+
+別のOllamaホストやモデルを使う場合は、各CLIで `--ollama-url`, `--model`, `--timeout` を指定します。
+
+```bash
+uv run novel-forge-kdp probe-model \
+  --ollama-url http://localhost:11434 \
+  --model qwen3.6:35b-a3b-mtp-q4_K_M \
+  --timeout 3600
+```
+
+## クイックスタート
+
+モデル接続とJSON応答を確認します。
 
 ```bash
 uv run novel-forge-kdp probe-model
 ```
 
-シリーズ企画:
+シリーズを企画します。
 
 ```bash
-uv run novel-forge-kdp plan-series "魔法学校 政治陰謀 家族の秘密"
+uv run novel-forge-kdp plan-series "地方港町 書店 珈琲 魔法契約 家族再生 KDP向けライト文芸ファンタジー"
 ```
 
-生成されたslugを確認して1巻分をシーン単位で作成:
+出力されたslugを使って1巻をシーン単位で生成します。
 
 ```bash
 uv run novel-forge-kdp write-volume <series-slug>
 ```
 
-巻全体レビュー、巻全体改稿、台帳更新、KDP向けドラフト出力:
+巻全体レビュー、巻全体改稿、台帳更新、KDP向け出力まで進めます。
 
 ```bash
 uv run novel-forge-kdp complete-volume <series-slug>
 ```
 
-レビューが出版準備未完了でも検証用に出力したい場合:
-
-```bash
-uv run novel-forge-kdp complete-volume <series-slug> --force
-```
-
-自律継続。未完了なら再開・完成、完成済みなら次巻作成:
-
-```bash
-uv run novel-forge-kdp continue-series <series-slug>
-```
-
-KDP向け出力だけ再生成:
-
-```bash
-uv run novel-forge-kdp export-volume <series-slug>
-```
-
-実モデルのスモーク検証などで1シーンだけ処理する場合:
-
-```bash
-uv run novel-forge-kdp write-volume <series-slug> --max-scenes 1
-```
-
-進捗確認:
+進捗を確認します。
 
 ```bash
 uv run novel-forge-kdp status <series-slug>
 ```
 
-作業フォルダは既定で `workspace/<series-slug>/` です。
+## CLIコマンド
+
+### `probe-model`
+
+Ollama OpenAI互換APIへ接続し、短いJSON応答を実際に検証します。
+
+```bash
+uv run novel-forge-kdp probe-model [--ollama-url URL] [--model MODEL] [--timeout SECONDS]
+```
+
+用途:
+
+- モデル名の確認
+- OpenAI互換APIの疎通確認
+- JSON parseとSchema検証の事前確認
+
+### `plan-series`
+
+キーワードからシリーズ企画を生成し、`workspace/<slug>/` を作成します。
+
+```bash
+uv run novel-forge-kdp plan-series "キーワード" [--workspace workspace]
+```
+
+生成物:
+
+- `series_plan.json`
+- `state.json`
+- `raw_logs/`
+
+既存slugがある場合は上書きせず停止します。
+
+### `write-volume`
+
+指定シリーズの巻アウトライン、シーン初稿、シーンレビュー、シーン改稿、章Markdownを生成します。
+
+```bash
+uv run novel-forge-kdp write-volume <series-slug> [--volume N] [--max-scenes N]
+```
+
+`--max-scenes` はスモーク検証用です。通常運用では未指定にします。
+
+### `complete-volume`
+
+巻全体レビュー、巻全体改稿、必要に応じた改稿後再レビュー、シリーズ台帳更新、KDP向け出力を実行します。
+
+```bash
+uv run novel-forge-kdp complete-volume <series-slug> [--volume N]
+```
+
+品質ゲートに失敗した場合、改稿済み原稿は保存したうえで標準では停止します。検証目的でどうしても出力したい場合のみ `--force` を指定します。
+
+```bash
+uv run novel-forge-kdp complete-volume <series-slug> --force
+```
+
+### `continue-series`
+
+現在巻が未完了なら完成処理を行い、現在巻が完成済みなら次巻を生成します。
+
+```bash
+uv run novel-forge-kdp continue-series <series-slug>
+```
+
+計画巻数を超える続巻生成は拒否します。
+
+### `export-volume`
+
+既存の改稿済み原稿からKDP向け出力だけを再生成します。
+
+```bash
+uv run novel-forge-kdp export-volume <series-slug> [--volume N]
+```
+
+### `status`
+
+`state.json` を読み、現在の進捗をJSONで表示します。
+
+```bash
+uv run novel-forge-kdp status <series-slug>
+```
 
 ## 作業フォルダ構造
 
@@ -150,6 +199,7 @@ workspace/<series-slug>/
   volume_001/
     outline.json
     volume_review.json
+    volume_review_final.json
     volume_revised.json
     volume_revised.md
     chapters/
@@ -168,44 +218,191 @@ workspace/<series-slug>/
         chapter_001.md
 ```
 
-## 設計方針
+## 出力ファイル
 
-- LLM出力は原則JSON。用途別Schemaで検証する。
-- 本文はシーン単位で生成し、レビューと改稿を必ず通す。各シーンをまとめた `chapters/chapter_NNN/chapter.md` と、巻改稿後の最終原稿から切り出した `exports/chapters/chapter_NNN.md` も保存し、人間が章単位で読めるようにする。
-- 巻全体でもレビューと改稿を行い、単発シーンの寄せ集めで終わらせない。
-- プロンプトはMarkdownファイルとして管理し、コード直書きを避ける。
-- RAWログは再現性・検証・プロンプト改善の材料として残す。未公開原稿とプロットが平文保存されるため、共有・公開・バックアップ時は取り扱いに注意する。
-- `state.json` を各ステップ後にatomic writeし、直前ファイルを `.bak` として保存する。
-- `bible.json` でキャラクター、用語、伏線、継続性メモを蓄積する。
-- 出版準備判定がfalseの巻は、まず巻全体改稿と改稿後再レビューを行う。改稿後もfalseなら標準では停止し、`--force` 指定時のみ出力する。
-- EPUBはKDP向け確認用のドラフトとして生成する。商用品質の最終EPUBには別途epubcheckや表紙・CSS・詳細メタデータ調整を行う。
-- モデルの長時間応答を前提に、timeoutは1時間。
-- 暗黙フォールバックより明示エラーを優先する。
+- `volume_revised.md`: 巻全体改稿後の最終Markdown原稿
+- `exports/manuscript.md`: KDP向けMarkdownドラフト
+- `exports/kdp.txt`: Markdown見出し記号を除去したプレーンテキスト
+- `exports/book.epub`: KDP確認用EPUBドラフト
+- `exports/metadata.json`: タイトルなどの簡易メタデータ
+- `exports/chapters/chapter_NNN.md`: 巻改稿後の最終原稿から切り出した章別Markdown
+- `chapters/chapter_NNN/chapter.md`: シーン改稿済み本文を章単位にまとめた中間原稿
 
-## 作業計画と進捗
+`book.epub` は確認用ドラフトです。商用品質の最終EPUBには、別途epubcheck、表紙、CSS、奥付、詳細メタデータ調整を行ってください。
 
-- [x] GitHub既存リポジトリ名の重複確認
-- [x] Python 3.14 + uv プロジェクト作成
-- [x] Ollamaモデル実動作検証
-- [x] JSON Schema / Markdown prompt 設計
-- [x] コア状態管理とワークフロー実装
-- [x] シーン単位の初稿・レビュー・改稿
-- [x] 巻全体レビュー・巻全体改稿
-- [x] 完成済み巻に対する次巻作成フロー
-- [x] キャラクター・用語・伏線台帳の自動更新
-- [x] Markdown / text / EPUB のKDP向けドラフト出力
-- [x] slug安全化・パストラバーサル拒否・既存シリーズ上書き拒否
-- [x] atomic write + `.bak` による状態ファイル保護
-- [x] 不完全原稿の黙殺禁止とLLM非JSON応答の明示例外化
-- [x] 出版準備判定に基づく品質ゲート
-- [x] Schema制約強化と異常系テスト追加
-- [x] CLI実装
-- [x] TDDテスト追加
-- [x] CLIから実モデルで `probe-model` / `plan-series` / `write-volume --max-scenes 1` を実行確認
+## 品質ゲート
+
+`complete-volume` は以下の場合に標準では停止します。
+
+- 巻レビューが `ready_for_publication: false` を返した
+- 改稿後再レビューでも `ready_for_publication: false` のまま
+- `issues[].severity` に `major`, `critical`, `blocker` が含まれる
+- 改稿後本文に `##` 章見出しがない
+- 改稿後本文の `##` 章見出し数がアウトライン章数と一致しない
+
+停止時も `volume_revised.md` やレビューJSONは保存されます。人間が確認して再実行するか、検証目的に限って `--force` を使います。
+
+## 構造制約
+
+実モデルの暴走を避けるため、現在は小さなKDPドラフト生成に寄せています。
+
+- シリーズ最大3巻
+- 各巻最大2章
+- 各章最大2シーン
+- 巻番号はシリーズ計画に存在する番号のみ許可
+- アウトラインの巻番号が要求巻番号と違う場合は拒否
+- 章番号重複は拒否
+- 同一章内のシーン番号重複は拒否
+- 章0件、シーン0件は拒否
+- cached `outline.json` でも同じruntime validationを実行
+
+## 安全性とデータ保全
+
+- slugは安全な文字列に正規化します
+- `../outside` のようなパストラバーサルは拒否します
+- シーン本文パスがシリーズディレクトリ外を指す場合は拒否します
+- `state.json` や主要JSONは一時ファイルへ書き、fsync後に置換します
+- 既存JSONは `.bak` として退避します
+- 暗黙のフォールバックより明示エラーを優先します
+- RAWログには未公開原稿、プロット、モデル応答が平文保存されます。公開・共有・バックアップ時は扱いに注意してください
+
+## 実測済みモデル挙動
+
+対象環境:
+
+- Ollama URL: `http://ws1.local:11434`
+- API: `/v1/chat/completions`
+- Model: `qwen3.6:35b-a3b-mtp-q4_K_M`
+- 想定 context length: `131072`
+- 想定 max tokens: `24576`
+- ツール側 timeout: `3600s`
+
+確認済み:
+
+- `response_format={"type":"json_object"}` と「JSONのみ」指示で短いJSONを返す
+- 約2万字級の長文入力でもJSON parse成功
+- 存在しないモデルはHTTP 404として明示エラー
+- 短すぎるtimeoutは `TimeoutError` として明示エラー
+- thinkingモデルで `message.reasoning` 側に出力が逃げる問題は、`think: false` 送信で回避
+
+## トラブルシューティング
+
+### `probe failed: LLM did not return valid JSON`
+
+原因候補:
+
+- モデルがJSON以外の文章を返した
+- thinkingモデルが `message.content` ではなく推論欄へ出力した
+- モデルがOpenAI互換APIの `response_format` に十分従っていない
+
+対処:
+
+- `probe_logs/*.json` を確認
+- 別モデルで `--model` を指定
+- Ollamaのモデルロード状態を確認
+- 既定クライアントは `think: false` を送信済み
+
+### `LLM HTTP error 404`
+
+モデル名が存在しないか、Ollama側にpullされていません。
+
+```bash
+ollama list
+ollama pull <model>
+```
+
+### `LLM request timed out after ...s`
+
+モデルが遅い、入力が大きい、またはCPU実行で時間がかかっています。
+
+対処:
+
+- `--timeout` を増やす
+- 小さいモデルを使う
+- `write-volume --max-scenes 1` でスモーク検証する
+
+### `volume review has major final review issues`
+
+ツールの品質ゲートが働いています。`volume_revised.md` と `volume_review*.json` を確認し、必要ならプロンプトや原稿を調整して再実行します。
+
+検証用に出力だけ必要な場合:
+
+```bash
+uv run novel-forge-kdp complete-volume <series-slug> --force
+```
+
+### `revised volume chapter count mismatch`
+
+巻全体改稿でLLMがアウトラインと違う章数を返しています。`volume_revised.md` の `##` 章見出し数を確認してください。ツールは章構造の破損を防ぐため停止します。
+
+## スモーク検証
+
+LLMを使わず、最小ワークスペースを作ってexportだけ確認できます。
+
+```bash
+uv run python scripts/make_smoke_workspace.py --root /tmp/novel-forge-smoke --slug smoke-one-scene
+uv run novel-forge-kdp export-volume smoke-one-scene --workspace /tmp/novel-forge-smoke
+```
+
+`--help` は副作用なしで表示されます。
+
+```bash
+uv run python scripts/make_smoke_workspace.py --help
+```
 
 ## 開発コマンド
 
 ```bash
 uv run pytest -q
+uv run python -m compileall -q src tests scripts
 uv build
+git diff --check
 ```
+
+セキュリティ簡易確認の観点:
+
+- hardcoded secretがないこと
+- `shell=True` / `os.system` がないこと
+- `eval` / `exec` がないこと
+- `pickle` がないこと
+- SQL文字列組み立てがないこと
+
+## プロンプトとSchema
+
+プロンプトはMarkdownで管理します。
+
+```text
+src/novel_forge_kdp/prompts/*.md
+```
+
+SchemaはJSON Schemaで管理します。
+
+```text
+src/novel_forge_kdp/schemas/*.json
+```
+
+LLM呼び出し時は、用途別Schemaをプロンプト末尾にも添付します。OpenAI互換APIの `response_format` だけに依存しません。
+
+## 実装済みチェックリスト
+
+- [x] Python 3.14 + uv プロジェクト
+- [x] Ollama OpenAI互換API連携
+- [x] モデル疎通確認CLI
+- [x] JSON Schema検証
+- [x] Markdown prompt管理
+- [x] シリーズ企画生成
+- [x] 巻アウトライン生成
+- [x] シーン初稿・レビュー・改稿
+- [x] 章Markdown生成
+- [x] 巻全体レビュー・巻全体改稿
+- [x] 改稿後章数検証
+- [x] 品質ゲート
+- [x] シリーズ台帳更新
+- [x] KDP向けMarkdown/text/EPUB出力
+- [x] 次巻継続フロー
+- [x] state.jsonによる再開
+- [x] atomic write + `.bak`
+- [x] slug/path安全化
+- [x] パストラバーサル拒否
+- [x] cached outline runtime validation
+- [x] TDD/異常系テスト
