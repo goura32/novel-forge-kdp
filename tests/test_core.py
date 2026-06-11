@@ -13,6 +13,60 @@ from novel_forge_kdp.workflow import NovelForge
 
 from tests.fakes import FakeLLM
 
+
+class FourSceneLLM(FakeLLM):
+    def complete_json(self, *, task, messages, schema, temperature=0.4, max_tokens=None):
+        if task == "volume_outline":
+            self.calls.append({"task": task, "messages": messages, "schema": schema})
+            return {
+                "volume_number": 1,
+                "title": "夜明けの禁書",
+                "chapters": [
+                    {
+                        "number": 1,
+                        "title": "第一章",
+                        "purpose": "導入",
+                        "scenes": [
+                            {"number": 1, "title": "一", "pov": "澪", "goal": "g", "conflict": "c", "outcome": "o"},
+                            {"number": 2, "title": "二", "pov": "澪", "goal": "g", "conflict": "c", "outcome": "o"},
+                        ],
+                    },
+                    {
+                        "number": 2,
+                        "title": "第二章",
+                        "purpose": "転換",
+                        "scenes": [
+                            {"number": 1, "title": "三", "pov": "澪", "goal": "g", "conflict": "c", "outcome": "o"},
+                            {"number": 2, "title": "四", "pov": "澪", "goal": "g", "conflict": "c", "outcome": "o"},
+                        ],
+                    },
+                ],
+            }
+        return super().complete_json(task=task, messages=messages, schema=schema, temperature=temperature, max_tokens=max_tokens)
+
+
+def revised_scene_keys(state):
+    return [(scene.chapter, scene.scene) for scene in state.volumes[0].scenes if scene.status == "revised"]
+
+
+def test_write_volume_max_scenes_counts_only_newly_processed_scenes_on_resume(tmp_path):
+    llm = FourSceneLLM()
+    forge = NovelForge(workspace=tmp_path, llm=llm)
+    forge.plan_series("星 図書館")
+
+    first = forge.write_volume("hoshikuzu-library", max_scenes=2)
+    assert revised_scene_keys(first) == [(1, 1), (1, 2)]
+    assert first.volumes[0].status == "outlined"
+
+    second = forge.write_volume("hoshikuzu-library", max_scenes=1)
+    assert revised_scene_keys(second) == [(1, 1), (1, 2), (2, 1)]
+    assert second.volumes[0].status == "outlined"
+
+    final = forge.write_volume("hoshikuzu-library")
+    assert revised_scene_keys(final) == [(1, 1), (1, 2), (2, 1), (2, 2)]
+    assert final.volumes[0].status == "drafted"
+
+
 def test_safe_slug_normalizes_names():
     assert safe_slug(" 星屑の図書館!! KDP ") == "kdp"
     assert safe_slug("Novel Forge 01") == "novel-forge-01"

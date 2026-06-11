@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from novel_forge_kdp.cli import app
-from novel_forge_kdp.llm import LLMClientError, OllamaOpenAIClient
+from novel_forge_kdp.llm import LLMClientError, OllamaOpenAIClient, build_chat_payload
 from novel_forge_kdp.workflow import NovelForge, NovelForgeError
 from novel_forge_kdp.models import VolumeProgress
 
@@ -298,6 +298,21 @@ def test_ollama_client_disables_thinking_for_json_mode(monkeypatch, tmp_path):
     client = OllamaOpenAIClient(log_dir=tmp_path)
     assert client.complete_json(task="x", messages=[{"role": "user", "content": "x"}], schema={"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}) == {"ok": True}
     assert seen_payloads[0]["think"] is False
+
+
+def test_build_chat_payload_appends_schema_hint_without_mutating_messages():
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "return json"}]
+    schema = {"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}}
+
+    payload = build_chat_payload(model="m", messages=messages, schema=schema, temperature=0.2, max_tokens=None)
+
+    assert payload["model"] == "m"
+    assert payload["temperature"] == 0.2
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["think"] is False
+    assert "max_tokens" not in payload
+    assert "JSON Schema to satisfy exactly" in payload["messages"][1]["content"]
+    assert messages[1]["content"] == "return json"
 
 
 def test_llm_non_json_http_200_becomes_llm_client_error(monkeypatch, tmp_path):

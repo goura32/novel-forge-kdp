@@ -5,9 +5,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .artifact_paths import SeriesPaths
 from .exporter import KdpExporter, chapter_heading_count, write_epub, write_export_chapters
 from .llm import OllamaOpenAIClient
 from .models import ChapterPlan, ProjectState, ScenePlan, SceneProgress, SeriesPlan, VolumeOutline, VolumeProgress
+from .outline_validation import OutlineValidationError, validate_volume_outline
 from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
 from .prompts import PromptStore
 from .quality import QualityGate, QualityGateError, review_has_blocking_issues
@@ -56,13 +58,14 @@ class NovelForge:
         if series_dir.exists():
             raise NovelForgeError(f"series already exists: {series.slug}")
         ensure_dir(series_dir)
-        ensure_dir(series_dir / "raw_logs")
-        self._write_json(series_dir / "series_plan.json", series.model_dump())
+        paths = SeriesPaths(series_dir)
+        ensure_dir(paths.raw_logs)
+        self._write_json(paths.series_plan, series.model_dump())
         self._save_state(series_dir, state)
         return state
 
     def status(self, slug: str) -> ProjectState:
-        state_path = self._series_dir(slug) / "state.json"
+        state_path = SeriesPaths(self._series_dir(slug)).state
         if not state_path.exists():
             raise NovelForgeError(f"series not found: {slug}")
         return ProjectState.model_validate_json(state_path.read_text(encoding="utf-8"))
@@ -72,7 +75,7 @@ class NovelForge:
         state = self.status(slug)
         number = volume_number or state.current_volume
         volume = self._ensure_volume_progress(state, number)
-        volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
+        volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
         outline = self._load_or_create_outline(series_dir, volume_dir, state, volume, number)
 
         if self._process_outline_scenes(series_dir, volume_dir, state, volume, outline, max_scenes):
@@ -97,7 +100,7 @@ class NovelForge:
         return volume
 
     def _load_or_create_outline(self, series_dir: Path, volume_dir: Path, state: ProjectState, volume: VolumeProgress, number: int) -> VolumeOutline:
-        outline_path = volume_dir / "outline.json"
+        outline_path = SeriesPaths(series_dir).volume(number).outline
         if outline_path.exists():
             outline = VolumeOutline.model_validate_json(outline_path.read_text(encoding="utf-8"))
             self._validate_volume_outline(outline, number)
@@ -204,26 +207,10 @@ class NovelForge:
 
     @staticmethod
     def _validate_volume_outline(outline: VolumeOutline, expected_number: int) -> None:
-        if outline.volume_number != expected_number:
-            raise NovelForgeError(f"volume outline number mismatch: expected={expected_number} actual={outline.volume_number}")
-        if len(outline.chapters) < 1:
-            raise NovelForgeError("outline has no chapters")
-        if len(outline.chapters) > 2:
-            raise NovelForgeError(f"too many chapters in outline: max=2 actual={len(outline.chapters)}")
-        chapter_numbers: set[int] = set()
-        for chapter in outline.chapters:
-            if chapter.number in chapter_numbers:
-                raise NovelForgeError(f"duplicate chapter number in outline: {chapter.number}")
-            chapter_numbers.add(chapter.number)
-            if len(chapter.scenes) < 1:
-                raise NovelForgeError(f"chapter has no scenes: chapter={chapter.number}")
-            if len(chapter.scenes) > 2:
-                raise NovelForgeError(f"too many scenes in outline chapter: chapter={chapter.number} max=2 actual={len(chapter.scenes)}")
-            scene_numbers: set[int] = set()
-            for scene in chapter.scenes:
-                if scene.number in scene_numbers:
-                    raise NovelForgeError(f"duplicate scene number in outline: chapter={chapter.number} scene={scene.number}")
-                scene_numbers.add(scene.number)
+        try:
+            validate_volume_outline(outline, expected_number)
+        except OutlineValidationError as exc:
+            raise NovelForgeError(str(exc)) from exc
 
     @staticmethod
     def _sync_volume_scenes(volume: VolumeProgress, outline: VolumeOutline) -> None:
@@ -245,7 +232,7 @@ class NovelForge:
         state = self.status(slug)
         number = volume_number or state.current_volume
         state, volume = self._ensure_revised_scenes(slug, state, number)
-        volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
+        volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
         manuscript = self._assemble_volume_manuscript(series_dir, volume)
         outline = self._load_validated_outline(volume_dir, number)
 
@@ -320,22 +307,25 @@ class NovelForge:
 
     def continue_series(self, slug: str) -> ProjectState:
         state = self.status(slug)
-        if state.current_volume > len(state.series.planned_volumes):
-            raise NovelForgeError(f"volume exceeds planned series: volume={state.current_volume} planned={len(state.series.planned_volumes)}")
-        current = next((v for v in state.volumes if v.number == state.current_volume), None)
+        self._ensure_planned_volume_number(state, state.current_volume)
+        current = self._find_volume(state, state.current_volume)
         if current is None or current.status != "revised":
             return self.complete_volume(slug, state.current_volume)
         next_number = state.current_volume + 1
-        if next_number > len(state.series.planned_volumes):
-            raise NovelForgeError(f"volume exceeds planned series: volume={next_number} planned={len(state.series.planned_volumes)}")
+        self._ensure_planned_volume_number(state, next_number)
         state.current_volume = next_number
-        if not any(v.number == next_number for v in state.volumes):
-            planned = next((v for v in state.series.planned_volumes if v.number == next_number), None)
-            if planned is None:
-                raise NovelForgeError(f"volume exceeds planned series: volume={next_number} planned={len(state.series.planned_volumes)}")
-            state.volumes.append(VolumeProgress(number=next_number, title=planned.title))
-            self._save_state(self._series_dir(slug), state)
+        self._ensure_volume_progress(state, next_number)
+        self._save_state(self._series_dir(slug), state)
         return self.write_volume(slug, next_number)
+
+    @staticmethod
+    def _find_volume(state: ProjectState, number: int) -> VolumeProgress | None:
+        return next((v for v in state.volumes if v.number == number), None)
+
+    @staticmethod
+    def _ensure_planned_volume_number(state: ProjectState, number: int) -> None:
+        if number > len(state.series.planned_volumes):
+            raise NovelForgeError(f"volume exceeds planned series: volume={number} planned={len(state.series.planned_volumes)}")
 
     def export_volume(self, slug: str, volume_number: int | None = None) -> Path:
         series_dir = self._series_dir(slug)
@@ -344,7 +334,7 @@ class NovelForge:
         volume = next((v for v in state.volumes if v.number == number), None)
         if volume is None:
             raise NovelForgeError(f"volume not found: {number}")
-        volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
+        volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
         manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8") if (volume_dir / "volume_revised.md").exists() else self._assemble_volume_manuscript(series_dir, volume)
         self._export_kdp(volume_dir, volume.title, manuscript)
         return volume_dir / "exports" / "manuscript.md"
@@ -368,7 +358,7 @@ class NovelForge:
         return "\n\n".join(parts).strip() + "\n"
 
     def _update_bible(self, series_dir: Path, manuscript: str) -> None:
-        bible_path = series_dir / "bible.json"
+        bible_path = SeriesPaths(series_dir).bible
         existing = bible_path.read_text(encoding="utf-8") if bible_path.exists() else "{}"
         bible = self._client_for(series_dir).complete_json(
             task="bible_update",
@@ -393,7 +383,7 @@ class NovelForge:
         write_epub(path, title, manuscript)
 
     def _save_state(self, series_dir: Path, state: ProjectState) -> None:
-        self._write_json(series_dir / "state.json", state.model_dump())
+        self._write_json(SeriesPaths(series_dir).state, state.model_dump())
 
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:

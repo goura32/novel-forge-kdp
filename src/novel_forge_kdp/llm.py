@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,40 @@ def parse_json_content(content: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError as exc:
         raise LLMClientError(f"LLM did not return valid JSON: {exc}") from exc
+
+
+def build_chat_payload(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    schema: dict[str, Any],
+    temperature: float,
+    max_tokens: int | None,
+) -> dict[str, Any]:
+    schema_hint = "\n\nJSON Schema to satisfy exactly:\n" + json.dumps(schema, ensure_ascii=False)
+    request_messages = deepcopy(messages)
+    for message in reversed(request_messages):
+        if message.get("role") == "user":
+            message["content"] = message.get("content", "") + schema_hint
+            break
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": request_messages,
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+        "think": False,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    return payload
+
+
+def validate_structured_output(parsed: Any, schema: dict[str, Any], content_preview: str) -> Any:
+    errors = sorted(Draft202012Validator(schema).iter_errors(parsed), key=lambda e: list(e.path))
+    if errors:
+        message = "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:5])
+        raise LLMClientError(f"JSON schema validation failed: {message}; content preview: {content_preview[:1000]}")
+    return parsed
 
 
 class OllamaOpenAIClient:
@@ -47,26 +82,19 @@ class OllamaOpenAIClient:
         temperature: float = 0.4,
         max_tokens: int | None = 24576,
     ) -> Any:
-        schema_hint = "\n\nJSON Schema to satisfy exactly:\n" + json.dumps(schema, ensure_ascii=False)
-        request_messages = [dict(m) for m in messages]
-        for message in reversed(request_messages):
-            if message.get("role") == "user":
-                message["content"] = message.get("content", "") + schema_hint
-                break
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": request_messages,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-            "think": False,
-        }
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
+        payload = build_chat_payload(model=self.model, messages=messages, schema=schema, temperature=temperature, max_tokens=max_tokens)
         started = datetime.now(UTC).isoformat()
+        response = self._post_chat_completion(task, started, payload)
+        raw = self._read_response_json(task, started, payload, response)
+        self._write_log(task, started, payload, raw)
+        return self._parse_and_validate_response(raw, schema)
+
+    def _post_chat_completion(self, task: str, started: str, payload: dict[str, Any]) -> httpx.Response:
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 response = client.post(f"{self.base_url}/v1/chat/completions", json=payload)
                 response.raise_for_status()
+                return response
         except httpx.HTTPStatusError as exc:
             self._write_log(task, started, payload, {"status_code": exc.response.status_code, "text": exc.response.text})
             raise LLMClientError(f"LLM HTTP error {exc.response.status_code}: {exc.response.text[:500]}") from exc
@@ -77,20 +105,18 @@ class OllamaOpenAIClient:
             self._write_log(task, started, payload, {"error": repr(exc)})
             raise LLMClientError(f"LLM request failed: {exc}") from exc
 
+    def _read_response_json(self, task: str, started: str, payload: dict[str, Any], response: httpx.Response) -> Any:
         try:
-            raw = response.json()
+            return response.json()
         except ValueError as exc:
             self._write_log(task, started, payload, {"status_code": response.status_code, "non_json_text": response.text[:2000]})
             raise LLMClientError(f"LLM response was not JSON: {response.text[:500]}") from exc
-        self._write_log(task, started, payload, raw)
+
+    def _parse_and_validate_response(self, raw: Any, schema: dict[str, Any]) -> Any:
         content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
         parsed = parse_json_content(content)
         parsed = self._unwrap_common_container(parsed, schema)
-        errors = sorted(Draft202012Validator(schema).iter_errors(parsed), key=lambda e: list(e.path))
-        if errors:
-            message = "; ".join(f"{list(e.path)}: {e.message}" for e in errors[:5])
-            raise LLMClientError(f"JSON schema validation failed: {message}; content preview: {content[:1000]}")
-        return parsed
+        return validate_structured_output(parsed, schema, content)
 
     @staticmethod
     def _unwrap_common_container(parsed: Any, schema: dict[str, Any]) -> Any:
