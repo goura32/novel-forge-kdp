@@ -572,3 +572,32 @@ def test_export_volume_uses_shared_manuscript_assembly_helper(tmp_path, monkeypa
 
     assert calls == [("assemble", "hoshikuzu-library", 1)]
     assert export_path.read_text(encoding="utf-8").startswith("# Export Spy")
+
+
+def test_export_volume_delegates_to_volume_export_workflow(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyVolumeExportWorkflow:
+        def __init__(self, **kwargs):
+            calls.append(("init", sorted(kwargs.keys())))
+
+        def run(self, *, series_dir, state, volume_number):
+            calls.append(("run", series_dir.name, state.current_volume, volume_number))
+            export_dir = series_dir / "volume_001" / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            path = export_dir / "manuscript.md"
+            path.write_text("# Spy Export\n", encoding="utf-8")
+            return path
+
+    monkeypatch.setattr(workflow_module, "VolumeExportWorkflow", SpyVolumeExportWorkflow, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+
+    export_path = forge.export_volume("hoshikuzu-library", volume_number=1)
+
+    assert export_path.read_text(encoding="utf-8") == "# Spy Export\n"
+    assert calls[0] == ("init", ["assemble_manuscript", "export_kdp"])
+    assert calls[1] == ("run", "hoshikuzu-library", 1, 1)

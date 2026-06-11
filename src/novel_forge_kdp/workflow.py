@@ -20,6 +20,7 @@ from .series_continuation_workflow import SeriesContinuationWorkflow
 from .series_planner import SeriesPlanner
 from .outline_scene_processor import OutlineSceneProcessor
 from .volume_completion_workflow import VolumeCompletionWorkflow
+from .volume_export_workflow import VolumeExportWorkflow, VolumeExportWorkflowError
 from .volume_outline_workflow import VolumeOutlineWorkflow
 from .volume_writing_workflow import VolumeWritingWorkflow
 
@@ -298,17 +299,13 @@ class NovelForge:
     def export_volume(self, slug: str, volume_number: int | None = None) -> Path:
         series_dir = self._series_dir(slug)
         state = self.status(slug)
-        number = volume_number or state.current_volume
-        volume = next((v for v in state.volumes if v.number == number), None)
-        if volume is None:
-            raise NovelForgeError(f"volume not found: {number}")
-        volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
-        if (volume_dir / "volume_revised.md").exists():
-            manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8")
-        else:
-            manuscript = assemble_volume_manuscript_for_forge(series_dir, volume)
-        self._export_kdp(volume_dir, volume.title, manuscript)
-        return volume_dir / "exports" / "manuscript.md"
+        try:
+            return VolumeExportWorkflow(
+                assemble_manuscript=assemble_volume_manuscript_for_forge,
+                export_kdp=self._export_kdp,
+            ).run(series_dir=series_dir, state=state, volume_number=volume_number)
+        except VolumeExportWorkflowError as exc:
+            raise NovelForgeError(str(exc)) from exc
 
     def _update_bible(self, series_dir: Path, manuscript: str) -> None:
         bible_path = SeriesPaths(series_dir).bible
