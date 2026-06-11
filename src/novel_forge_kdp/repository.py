@@ -36,10 +36,8 @@ class StateStore:
         # Backup current file before overwrite.
         if path.exists():
             backup = path.with_suffix(path.suffix + ".bak")
-            existing = json.loads(path.read_text(encoding="utf-8"))
             backup.write_bytes(path.read_bytes())
-            print(f"DEBUG: backed up {path} → {backup}")
-        tmp_path.rename(path)
+        tmp_path.replace(path)
 
 
 class StateRepository:

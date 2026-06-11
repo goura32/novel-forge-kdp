@@ -141,3 +141,18 @@ def test_state_repo_loads_valid_json_into_ProjectState(tmp_path):
     assert loaded.series.title == "テストシリーズ"
     assert len(loaded.volumes) == 1
     assert loaded.current_volume == 1
+
+
+def test_state_store_overwrite_is_silent(tmp_path, capsys):
+    from novel_forge_kdp.repository import StateStore
+
+    store = StateStore()
+    path = tmp_path / "state.json"
+    store.save(path, {"version": 1})
+    store.save(path, {"version": 2})
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert store.load(path) == {"version": 2}
+    assert (tmp_path / "state.json.bak").exists()

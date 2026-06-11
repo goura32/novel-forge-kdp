@@ -13,6 +13,7 @@ from .outline_validation import OutlineValidationError, validate_volume_outline
 from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
 from .prompts import PromptStore
 from .quality import QualityGate, QualityGateError, review_has_blocking_issues
+from .repository import StateRepository
 from .schemas import load_schema
 from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
 
@@ -27,6 +28,7 @@ class NovelForge:
         ensure_dir(self.workspace)
         self.prompts = prompts or PromptStore()
         self.llm = llm
+        self.repository = StateRepository()
 
     def _client_for(self, series_dir: Path | None = None) -> Any:
         if self.llm is not None:
@@ -66,10 +68,11 @@ class NovelForge:
         return state
 
     def status(self, slug: str) -> ProjectState:
-        state_path = SeriesPaths(self._series_dir(slug)).state
-        if not state_path.exists():
-            raise NovelForgeError(f"series not found: {slug}")
-        return ProjectState.model_validate_json(state_path.read_text(encoding="utf-8"))
+        series_dir = self._series_dir(slug)
+        try:
+            return self.repository.load_state(series_dir)
+        except FileNotFoundError as exc:
+            raise NovelForgeError(f"series not found: {slug}") from exc
 
     def write_volume(self, slug: str, volume_number: int | None = None, max_scenes: int | None = None) -> ProjectState:
         series_dir = self._series_dir(slug)
@@ -361,7 +364,7 @@ class NovelForge:
         write_epub(path, title, manuscript)
 
     def _save_state(self, series_dir: Path, state: ProjectState) -> None:
-        self._write_json(SeriesPaths(series_dir).state, state.model_dump())
+        self.repository.save_state(series_dir, state)
 
     @staticmethod
     def _write_json(path: Path, data: Any) -> None:

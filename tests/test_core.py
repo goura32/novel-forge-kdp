@@ -189,3 +189,54 @@ def test_write_volume_process_scene_delegates_to_scene_workflow(tmp_path, monkey
     assert calls[1] == ("run", 1, 1, "planned")
     assert state.volumes[0].scenes[0].status == "revised"
     assert (tmp_path / "hoshikuzu-library" / "volume_001" / "chapters" / "chapter_001" / "scene_001.md").read_text(encoding="utf-8").startswith("# Spy Scene")
+
+
+def test_plan_series_saves_state_through_state_repository(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyRepository:
+        def __init__(self):
+            calls.append(("init",))
+
+        def load_state(self, series_dir):
+            raise FileNotFoundError(series_dir)
+
+        def save_state(self, series_dir, state):
+            calls.append(("save_state", series_dir.name, state.series.slug))
+            (series_dir / "state.json").write_text(state.model_dump_json(), encoding="utf-8")
+
+    monkeypatch.setattr(workflow_module, "StateRepository", SpyRepository, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.plan_series("星 図書館")
+
+    assert state.series.slug == "hoshikuzu-library"
+    assert calls == [("init",), ("save_state", "hoshikuzu-library", "hoshikuzu-library")]
+
+
+def test_status_loads_state_through_state_repository(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyRepository:
+        def __init__(self):
+            calls.append(("init",))
+
+        def load_state(self, series_dir):
+            calls.append(("load_state", series_dir.name))
+            return "LOADED_STATE"
+
+        def save_state(self, series_dir, state):
+            calls.append(("save_state", series_dir.name))
+
+    monkeypatch.setattr(workflow_module, "StateRepository", SpyRepository, raising=False)
+    series_dir = tmp_path / "hoshikuzu-library"
+    series_dir.mkdir()
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+
+    assert forge.status("hoshikuzu-library") == "LOADED_STATE"
+    assert calls == [("init",), ("load_state", "hoshikuzu-library")]
