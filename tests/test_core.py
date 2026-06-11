@@ -2,8 +2,10 @@ import json
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from novel_forge_kdp.llm import LLMClientError, parse_json_content
+from novel_forge_kdp.schemas import load_schema
 from novel_forge_kdp.paths import safe_slug
 from novel_forge_kdp.prompts import PromptStore
 from novel_forge_kdp.workflow import NovelForge
@@ -89,6 +91,24 @@ def test_prompt_store_renders_markdown_templates(tmp_path):
     (prompts / "demo.md").write_text("# Demo\nKeyword: {{ keyword }}", encoding="utf-8")
     store = PromptStore(prompts)
     assert "Keyword: 魔法" in store.render("demo", keyword="魔法")
+
+
+def test_generation_schemas_bound_production_workload():
+    series_schema = load_schema("series_plan")
+    volume_schema = load_schema("volume_outline")
+    assert series_schema["properties"]["planned_volumes"]["maxItems"] == 3
+    assert volume_schema["properties"]["chapters"]["maxItems"] == 2
+    assert volume_schema["properties"]["chapters"]["items"]["properties"]["scenes"]["maxItems"] == 2
+
+    too_many_chapters = {
+        "volume_number": 1,
+        "title": "Too Long",
+        "chapters": [
+            {"number": i, "title": f"Chapter {i}", "purpose": "p", "scenes": [{"number": 1, "title": "S", "pov": "p", "goal": "g", "conflict": "c", "outcome": "o"}]}
+            for i in range(1, 6)
+        ],
+    }
+    assert list(Draft202012Validator(volume_schema).iter_errors(too_many_chapters))
 
 
 def test_new_series_creates_resumeable_scene_workflow(tmp_path):

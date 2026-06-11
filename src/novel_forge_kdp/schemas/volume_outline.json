@@ -77,12 +77,14 @@
               },
               "additionalProperties": false
             },
-            "minItems": 1
+            "minItems": 1,
+            "maxItems": 2
           }
         },
         "additionalProperties": false
       },
-      "minItems": 1
+      "minItems": 1,
+      "maxItems": 2
     }
   },
   "additionalProperties": false

@@ -58,6 +58,7 @@ class OllamaOpenAIClient:
             "messages": request_messages,
             "temperature": temperature,
             "response_format": {"type": "json_object"},
+            "think": False,
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens

@@ -72,17 +72,20 @@ class NovelForge:
         series_dir = self._series_dir(slug)
         state = self.status(slug)
         number = volume_number or state.current_volume
+        if number > len(state.series.planned_volumes):
+            raise NovelForgeError(f"volume exceeds planned series: volume={number} planned={len(state.series.planned_volumes)}")
         volume = next((v for v in state.volumes if v.number == number), None)
         if volume is None:
             planned = next((v for v in state.series.planned_volumes if v.number == number), None)
             if planned is None:
-                planned = state.series.planned_volumes[-1]
+                raise NovelForgeError(f"volume exceeds planned series: volume={number} planned={len(state.series.planned_volumes)}")
             volume = VolumeProgress(number=number, title=planned.title)
             state.volumes.append(volume)
         volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
         outline_path = volume_dir / "outline.json"
         if outline_path.exists():
             outline = VolumeOutline.model_validate_json(outline_path.read_text(encoding="utf-8"))
+            self._validate_volume_outline(outline, number)
             self._sync_volume_scenes(volume, outline)
         else:
             outline_data = self._client_for(series_dir).complete_json(
@@ -94,6 +97,7 @@ class NovelForge:
                 schema=load_schema("volume_outline"),
             )
             outline = VolumeOutline.model_validate(outline_data)
+            self._validate_volume_outline(outline, number)
             self._write_json(outline_path, outline.model_dump())
             volume.status = "outlined"
             self._sync_volume_scenes(volume, outline)
@@ -172,6 +176,29 @@ class NovelForge:
         return candidate
 
     @staticmethod
+    def _validate_volume_outline(outline: VolumeOutline, expected_number: int) -> None:
+        if outline.volume_number != expected_number:
+            raise NovelForgeError(f"volume outline number mismatch: expected={expected_number} actual={outline.volume_number}")
+        if len(outline.chapters) < 1:
+            raise NovelForgeError("outline has no chapters")
+        if len(outline.chapters) > 2:
+            raise NovelForgeError(f"too many chapters in outline: max=2 actual={len(outline.chapters)}")
+        chapter_numbers: set[int] = set()
+        for chapter in outline.chapters:
+            if chapter.number in chapter_numbers:
+                raise NovelForgeError(f"duplicate chapter number in outline: {chapter.number}")
+            chapter_numbers.add(chapter.number)
+            if len(chapter.scenes) < 1:
+                raise NovelForgeError(f"chapter has no scenes: chapter={chapter.number}")
+            if len(chapter.scenes) > 2:
+                raise NovelForgeError(f"too many scenes in outline chapter: chapter={chapter.number} max=2 actual={len(chapter.scenes)}")
+            scene_numbers: set[int] = set()
+            for scene in chapter.scenes:
+                if scene.number in scene_numbers:
+                    raise NovelForgeError(f"duplicate scene number in outline: chapter={chapter.number} scene={scene.number}")
+                scene_numbers.add(scene.number)
+
+    @staticmethod
     def _sync_volume_scenes(volume: VolumeProgress, outline: VolumeOutline) -> None:
         existing = {(scene.chapter, scene.scene): scene for scene in volume.scenes}
         synced: list[SceneProgress] = []
@@ -196,6 +223,9 @@ class NovelForge:
             volume = next(v for v in state.volumes if v.number == number)
         volume_dir = ensure_dir(series_dir / f"volume_{number:03d}")
         manuscript = self._assemble_volume_manuscript(series_dir, volume)
+        outline = VolumeOutline.model_validate_json((volume_dir / "outline.json").read_text(encoding="utf-8"))
+        self._validate_volume_outline(outline, number)
+        expected_chapter_count = len(outline.chapters)
         review = self._client_for(series_dir).complete_json(
             task="volume_review",
             messages=[
@@ -209,11 +239,17 @@ class NovelForge:
             task="revise_volume",
             messages=[
                 {"role": "system", "content": _json_system()},
-                {"role": "user", "content": self.prompts.render("revise_volume", manuscript=manuscript, review=json.dumps(review, ensure_ascii=False))},
+                {"role": "user", "content": self.prompts.render("revise_volume", manuscript=manuscript, review=json.dumps(review, ensure_ascii=False), chapter_count=expected_chapter_count)},
             ],
             schema=load_schema("revised_volume"),
         )
+        chapter_heading_count = _chapter_heading_count(revised["body"])
+        if chapter_heading_count < 1:
+            raise NovelForgeError("revised volume has no chapter headings: expected at least one '## ' chapter heading")
+        if chapter_heading_count != expected_chapter_count:
+            raise NovelForgeError(f"revised volume chapter count mismatch: expected={expected_chapter_count} actual={chapter_heading_count}")
         self._write_json(volume_dir / "volume_revised.json", revised)
+        volume.title = revised["title"]
         revised_md = f"# {revised['title']}\n\n{revised['body'].strip()}\n"
         (volume_dir / "volume_revised.md").write_text(revised_md, encoding="utf-8")
         final_review = review
@@ -231,6 +267,10 @@ class NovelForge:
             volume.status = "reviewed"
             self._save_state(series_dir, state)
             raise NovelForgeError("volume review says not ready for publication after revision; revised draft saved, rerun with force=True to export anyway")
+        if not force and _review_has_blocking_issues(final_review):
+            volume.status = "reviewed"
+            self._save_state(series_dir, state)
+            raise NovelForgeError("volume review has major final review issues; revised draft saved, rerun with force=True to export anyway")
         self._update_bible(series_dir, revised_md)
         self._export_kdp(volume_dir, revised["title"], revised_md)
         volume.status = "revised"
@@ -239,15 +279,20 @@ class NovelForge:
 
     def continue_series(self, slug: str) -> ProjectState:
         state = self.status(slug)
+        if state.current_volume > len(state.series.planned_volumes):
+            raise NovelForgeError(f"volume exceeds planned series: volume={state.current_volume} planned={len(state.series.planned_volumes)}")
         current = next((v for v in state.volumes if v.number == state.current_volume), None)
         if current is None or current.status != "revised":
             return self.complete_volume(slug, state.current_volume)
         next_number = state.current_volume + 1
+        if next_number > len(state.series.planned_volumes):
+            raise NovelForgeError(f"volume exceeds planned series: volume={next_number} planned={len(state.series.planned_volumes)}")
         state.current_volume = next_number
         if not any(v.number == next_number for v in state.volumes):
             planned = next((v for v in state.series.planned_volumes if v.number == next_number), None)
-            title = planned.title if planned is not None else f"Volume {next_number}"
-            state.volumes.append(VolumeProgress(number=next_number, title=title))
+            if planned is None:
+                raise NovelForgeError(f"volume exceeds planned series: volume={next_number} planned={len(state.series.planned_volumes)}")
+            state.volumes.append(VolumeProgress(number=next_number, title=planned.title))
             self._save_state(self._series_dir(slug), state)
         return self.write_volume(slug, next_number)
 
@@ -299,7 +344,7 @@ class NovelForge:
         exports = ensure_dir(volume_dir / "exports")
         clean = manuscript.strip() + "\n"
         (exports / "manuscript.md").write_text(clean, encoding="utf-8")
-        text = clean.replace("# ", "").replace("## ", "")
+        text = re.sub(r"^#{1,6}\s+", "", clean, flags=re.MULTILINE)
         (exports / "kdp.txt").write_text(text.strip() + "\n", encoding="utf-8")
         (exports / "metadata.json").write_text(json.dumps({"title": title, "format": "KDP text/markdown/EPUB draft"}, ensure_ascii=False, indent=2), encoding="utf-8")
         NovelForge._write_epub(exports / "book.epub", title, clean)
@@ -365,6 +410,14 @@ class NovelForge:
         if path.exists():
             backup.write_bytes(path.read_bytes())
         tmp.replace(path)
+
+
+def _chapter_heading_count(markdown: str) -> int:
+    return len(re.findall(r"^##\s+.+$", markdown, re.MULTILINE))
+
+
+def _review_has_blocking_issues(review: dict[str, Any]) -> bool:
+    return any(str(issue.get("severity", "")).lower() in {"major", "critical", "blocker"} for issue in review.get("issues", []) if isinstance(issue, dict))
 
 
 def _json_system() -> str:
