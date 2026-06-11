@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 from .models import ProjectState, VolumeProgress, VolumeOutline
@@ -9,11 +8,11 @@ from .models import ProjectState, VolumeProgress, VolumeOutline
 class OutlineSceneProcessor:
     """Outline chapters → scenes に対する scene processing の orchestrator."""
 
-    def __init__(self, *, process_scene, save_state):
-        # type signatures intentionally omitted for DI flexibility;
-        # the two callables have the exact same shape as NovelForge._process_outline_scenes + _process_scene.
+    def __init__(self, *, process_scene, save_state, chapter_manuscript_assembler):
+        # process_scene keeps the same shape as NovelForge._process_scene.
         self.process_scene = process_scene
         self.save_state = save_state
+        self.chapter_manuscript_assembler = chapter_manuscript_assembler
 
     def process(
         self,*,
@@ -44,20 +43,7 @@ class OutlineSceneProcessor:
 
                 revised_now = self.process_scene(series_dir, volume_dir, state, outline, chapter, scene, progress)
                 if revised_now:
-                    chapter_md_path = (volume_dir / "chapters" / f"chapter_{chapter.number:03d}" / "chapter.md")
-                    from .paths import ensure_dir
-
-                    chapter_dir = ensure_dir(chapter_md_path.parent)
-                    parts = [f"## {chapter.title}"]
-                    for sc in chapter.scenes:
-                        scene_md = chapter_dir / f"scene_{sc.number:03d}.md"
-                        if scene_md.exists():
-                            text = scene_md.read_text(encoding="utf-8").strip()
-                            if text:
-                                parts.append(text)
-                    (chapter_md_path).write_text("\n\n".join(parts).strip() + "\n", encoding="utf-8")
-
-                if revised_now:
+                    self.chapter_manuscript_assembler.write_chapter_markdown(volume_dir, chapter)
                     processed += 1
         return False
 

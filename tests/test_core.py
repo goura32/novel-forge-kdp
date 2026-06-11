@@ -224,11 +224,11 @@ def test_write_volume_delegates_to_volume_writing_workflow(tmp_path, monkeypatch
     assert state.volumes[0].status == "drafted"
     assert calls[0][0] == "init"
     assert calls[0][1] == [
+        "chapter_manuscript_assembler",
         "ensure_volume_progress",
         "load_or_create_outline",
         "outline_scene_processor",
         "save_state",
-        "write_chapter_markdown",
     ]
     assert calls[1] == ("run", "hoshikuzu-library", 1, 2)
 
@@ -488,44 +488,29 @@ def test_continue_series_delegates_to_series_continuation_workflow(tmp_path, mon
     assert calls[1] == ("continue_series", "hoshikuzu-library")
 
 
-def test_process_outline_scenes_delegates_to_outline_scene_processor(tmp_path, monkeypatch):
+def test_novelforge_no_longer_exposes_process_outline_scenes_helper():
+    assert not hasattr(NovelForge, "_process_outline_scenes")
+
+
+def test_novelforge_no_longer_exposes_volume_progress_helpers():
+    assert not hasattr(NovelForge, "_ensure_volume_progress")
+    assert not hasattr(NovelForge, "_sync_volume_scenes")
+    assert not hasattr(NovelForge, "_ensure_revised_scenes")
+    assert not hasattr(NovelForge, "_find_volume")
+    assert not hasattr(NovelForge, "_ensure_planned_volume_number")
+
+
+def test_novelforge_no_longer_exposes_chapter_markdown_helper():
+    assert not hasattr(NovelForge, "_write_chapter_markdown")
+
+
+def test_workflow_module_no_longer_exposes_exporter_compat_helpers():
     import novel_forge_kdp.workflow as workflow_module
 
-    calls = []
-
-    class SpyOutlineSceneProcessor:
-        def __init__(self, **kwargs):
-            calls.append(("init", sorted(kwargs.keys())))
-
-        def process(self, *, series_dir, volume_dir, state, outline, volume, max_scenes):
-            calls.append(
-                (
-                    "process",
-                    series_dir.name,
-                    len(outline.chapters),
-                    volume.number,
-                    max_scenes,
-                )
-            )
-            return False
-
-    monkeypatch.setattr(workflow_module, "OutlineSceneProcessor", SpyOutlineSceneProcessor, raising=False)
-
-    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
-    state = forge.plan_series("星 図書館")
-    volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
-    volume_dir.mkdir(parents=True)
-    outline_data = FakeLLM().complete_json(task="volume_outline", messages=[], schema={})
-    outline = workflow_module.VolumeOutline.model_validate(outline_data)
-
-    result = forge._process_outline_scenes(
-        tmp_path / "hoshikuzu-library", volume_dir, state, state.volumes[0], outline, max_scenes=1
-    )
-
-    assert result is False
-    assert calls[0][0] == "init"
-    assert calls[0][1] == ["process_scene", "save_state"]
-    assert calls[1] == ("process", "hoshikuzu-library", len(outline.chapters), 1, 1)
+    assert not hasattr(NovelForge, "_write_export_chapters")
+    assert not hasattr(NovelForge, "_write_epub")
+    assert not hasattr(workflow_module, "_chapter_heading_count")
+    assert not hasattr(workflow_module, "_review_has_blocking_issues")
 
 
 def test_write_volume_injects_outline_scene_processor_into_volume_writing_workflow(tmp_path, monkeypatch):

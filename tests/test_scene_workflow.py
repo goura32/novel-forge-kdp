@@ -9,14 +9,24 @@ class JsonTestRepository:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def test_scene_workflow_requires_repository_instead_of_write_json_callback():
+def test_scene_workflow_requires_repository_and_llm_calls_instead_of_write_json_callback():
     import inspect
 
     from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
-    assert "repository" in inspect.signature(SceneWorkflow).parameters
-    assert "write_json" not in inspect.signature(SceneWorkflow).parameters
+    signature = inspect.signature(SceneWorkflow)
+    assert "repository" in signature.parameters
+    assert "llm_calls" in signature.parameters
+    assert signature.parameters["llm_calls"].default is inspect.Signature.empty
+    assert "write_json" not in signature.parameters
     assert not hasattr(SceneWorkflow, "_write_json")
+
+
+def test_scene_workflow_keeps_test_fake_out_of_production_module():
+    import novel_forge_kdp.scene_workflow as scene_workflow
+
+    assert not hasattr(scene_workflow, "MockLlmCalls")
 
 
 def test_process_creates_draft_review_revised_files(tmp_path):
@@ -34,7 +44,8 @@ def test_process_creates_draft_review_revised_files(tmp_path):
         Character,
         PlannedVolume,
     )
-    from novel_forge_kdp.scene_workflow import MockLlmCalls, SceneWorkflow
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -90,7 +101,7 @@ def test_process_creates_draft_review_revised_files(tmp_path):
         ],
     )
 
-    mock = MockLlmCalls(
+    mock = FakeSceneLlmCalls(
         draft={"title": "テストタイトル", "body": "テスト本文"},
         review_status="ready_for_publication",
         revised={"title": "レビュー済みタイトル", "body": "修正後の本文"},
@@ -137,7 +148,8 @@ def test_process_resumes_at_planned(tmp_path):
         Character,
         PlannedVolume,
     )
-    from novel_forge_kdp.scene_workflow import MockLlmCalls, SceneWorkflow
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -187,7 +199,7 @@ def test_process_resumes_at_planned(tmp_path):
         volumes=[VolumeProgress(number=1, title="第一巻", scenes=[])],
     )
 
-    wf = SceneWorkflow(repository=JsonTestRepository())  # mock は使わない（テストの分岐だけ）
+    wf = SceneWorkflow(llm_calls=FakeSceneLlmCalls(review_status="ready_for_publication"), repository=JsonTestRepository())
     progress = SceneProgress(chapter=1, scene=1, title="テストシーン")
     state.volumes[0].scenes.append(progress)
 
@@ -221,7 +233,8 @@ def test_process_resumes_at_drafting(tmp_path):
         Character,
         PlannedVolume,
     )
-    from novel_forge_kdp.scene_workflow import MockLlmCalls, SceneWorkflow
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -284,7 +297,7 @@ def test_process_resumes_at_drafting(tmp_path):
 
     progress.status = "drafted"
 
-    mock = MockLlmCalls(
+    mock = FakeSceneLlmCalls(
         draft=draft_data,
         review_status="ready_for_publication",
         revised={"title": "reviseタイトル", "body": "修正本文"},
@@ -321,7 +334,8 @@ def test_process_resumes_at_reviewing(tmp_path):
         Character,
         PlannedVolume,
     )
-    from novel_forge_kdp.scene_workflow import MockLlmCalls, SceneWorkflow
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -354,7 +368,7 @@ def test_process_resumes_at_reviewing(tmp_path):
                 purpose="導入",
                 scenes=[
                     ScenePlan(
-                        number=1,
+                        number=3,
                         title="テストシーン3",
                         pov="澪",
                         goal="探す",
@@ -394,7 +408,7 @@ def test_process_resumes_at_reviewing(tmp_path):
 
     progress.status = "reviewed"
 
-    mock = MockLlmCalls(
+    mock = FakeSceneLlmCalls(
         draft=draft_data,
         review_status="ready_for_publication",
         revised={"title": "reviseB", "body": "本文修正B"},
@@ -432,6 +446,7 @@ def test_process_already_revised_returns_false(tmp_path):
         PlannedVolume,
     )
     from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -486,7 +501,7 @@ def test_process_already_revised_returns_false(tmp_path):
     # Already revised → run() should skip everything since no step matches "revised" status
     progress.status = "revised"
 
-    wf = SceneWorkflow(repository=JsonTestRepository())
+    wf = SceneWorkflow(llm_calls=FakeSceneLlmCalls(review_status="ready_for_publication"), repository=JsonTestRepository())
     result = wf.run(
         series_dir=series_dir,
         volume_dir=volume_dir,
@@ -517,7 +532,8 @@ def test_process_stops_at_drafted_when_not_review_status(tmp_path):
         Character,
         PlannedVolume,
     )
-    from novel_forge_kdp.scene_workflow import MockLlmCalls, SceneWorkflow
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -569,7 +585,7 @@ def test_process_stops_at_drafted_when_not_review_status(tmp_path):
     progress = SceneProgress(chapter=1, scene=5, title="テストシーン5")
     state.volumes[0].scenes.append(progress)
 
-    mock = MockLlmCalls(
+    mock = FakeSceneLlmCalls(
         draft={"title": "タイトルC", "body": "本文C"},
         review_status=None,  # not ready
         revised={"title": "reviseC", "body": "修正C"},
@@ -606,7 +622,8 @@ def test_process_stops_at_reviewed_when_not_revised(tmp_path):
         Character,
         PlannedVolume,
     )
-    from novel_forge_kdp.scene_workflow import MockLlmCalls, SceneWorkflow
+    from novel_forge_kdp.scene_workflow import SceneWorkflow
+    from tests.fakes import FakeSceneLlmCalls
 
     series_dir = tmp_path / "series"
     series_dir.mkdir()
@@ -639,7 +656,7 @@ def test_process_stops_at_reviewed_when_not_revised(tmp_path):
                 purpose="導入",
                 scenes=[
                     ScenePlan(
-                        number=1,
+                        number=6,
                         title="テストシーン6",
                         pov="澪",
                         goal="探す",
@@ -679,7 +696,7 @@ def test_process_stops_at_reviewed_when_not_revised(tmp_path):
 
     progress.status = "reviewed"
 
-    mock = MockLlmCalls(
+    mock = FakeSceneLlmCalls(
         draft=draft_data,
         review_status={"ready_for_publication": True},
         revised={"title": "reviseD", "body": "修正D"},

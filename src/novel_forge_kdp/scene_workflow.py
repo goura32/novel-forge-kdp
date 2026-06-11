@@ -46,15 +46,6 @@ class SceneLlmCalls:
 
 
 @dataclass
-class MockLlmCalls:
-    """Mock responses for standalone SceneWorkflow tests."""
-
-    draft: dict[str, Any] | None = None
-    review_status: dict[str, Any] | str | None = None
-    revised: dict[str, Any] | None = None
-
-
-@dataclass
 class SceneResult:
     draft_created: bool = False
     review_done: bool = False
@@ -70,7 +61,7 @@ class SceneWorkflow:
     """Executes one scene through the draft -> review -> revise lifecycle."""
 
     repository: JsonRepositoryProtocol
-    llm_calls: SceneLlmCallsProtocol | MockLlmCalls | None = None
+    llm_calls: SceneLlmCallsProtocol
     save_state: StateSaver | None = None
 
     def run(
@@ -111,19 +102,7 @@ class SceneWorkflow:
         return result
 
     def _draft(self, *, volume_dir: Path, state: Any, outline: Any, chapter: Any, scene: Any) -> dict[str, Any]:
-        if isinstance(self.llm_calls, MockLlmCalls):
-            draft_data = self.llm_calls.draft or {
-                "title": f"Draft of scene {scene.number}",
-                "body": f"Draft content for {scene.title}.",
-            }
-        elif self.llm_calls is not None:
-            draft_data = self.llm_calls.draft(state=state, outline=outline, scene=scene)
-        else:
-            draft_data = {
-                "title": f"Draft of scene {scene.number}",
-                "body": f"Draft content for {scene.title}.",
-            }
-
+        draft_data = self.llm_calls.draft(state=state, outline=outline, scene=scene)
         self.repository.save_json(self._scene_dir(volume_dir, chapter) / f"scene_{scene.number:03d}.draft.json", draft_data)
         return draft_data
 
@@ -132,26 +111,9 @@ class SceneWorkflow:
         draft_path = scene_dir / f"scene_{scene.number:03d}.draft.json"
         draft_data = json.loads(draft_path.read_text(encoding="utf-8"))
 
-        if isinstance(self.llm_calls, MockLlmCalls):
-            if self.llm_calls.review_status is None:
-                return None
-            review_result: dict[str, Any]
-            if isinstance(self.llm_calls.review_status, str):
-                review_result = {"ready_for_publication": self.llm_calls.review_status == "ready_for_publication"}
-            else:
-                review_result = self.llm_calls.review_status
-        elif self.llm_calls is not None:
-            maybe_review = self.llm_calls.review(draft_data=draft_data)
-            if maybe_review is None:
-                return None
-            review_result = maybe_review
-        else:
-            review_result = {
-                "issues": [],
-                "ready_for_publication": True,
-                "suggested_changes": "",
-                "overall_quality_score": 9,
-            }
+        review_result = self.llm_calls.review(draft_data=draft_data)
+        if review_result is None:
+            return None
 
         self.repository.save_json(scene_dir / f"scene_{scene.number:03d}.review.json", review_result)
         return review_result
@@ -161,23 +123,12 @@ class SceneWorkflow:
         draft_path = scene_dir / f"scene_{scene.number:03d}.draft.json"
         review_path = scene_dir / f"scene_{scene.number:03d}.review.json"
 
-        if isinstance(self.llm_calls, MockLlmCalls):
-            if self.llm_calls.revised is None:
-                return False
-            revised_data = self.llm_calls.revised
-        elif self.llm_calls is not None:
-            revised_data = self.llm_calls.revise(
-                draft_text=draft_path.read_text(encoding="utf-8"),
-                review_text=review_path.read_text(encoding="utf-8"),
-            )
-            if revised_data is None:
-                return False
-        else:
-            draft_data = json.loads(draft_path.read_text(encoding="utf-8"))
-            revised_data = {
-                "title": f"Revised: {draft_data.get('title', 'Untitled')}",
-                "body": draft_data.get("body", ""),
-            }
+        revised_data = self.llm_calls.revise(
+            draft_text=draft_path.read_text(encoding="utf-8"),
+            review_text=review_path.read_text(encoding="utf-8"),
+        )
+        if revised_data is None:
+            return False
 
         self.repository.save_json(scene_dir / f"scene_{scene.number:03d}.revised.json", revised_data)
         self._scene_markdown_path(volume_dir, chapter, scene).write_text(

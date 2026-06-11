@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_paths import SeriesPaths
-from .models import ChapterPlan, ProjectState, VolumeOutline, VolumeProgress
+from .models import ProjectState, VolumeOutline, VolumeProgress
 from .paths import ensure_dir
 
 
@@ -16,13 +16,13 @@ class VolumeWritingWorkflow:
         ensure_volume_progress: Callable[[ProjectState, int], VolumeProgress],
         load_or_create_outline: Callable[[Path, Path, ProjectState, VolumeProgress, int], VolumeOutline],
         outline_scene_processor: Any,
-        write_chapter_markdown: Callable[[Path, ChapterPlan], None],
+        chapter_manuscript_assembler: Any,
         save_state: Callable[[Path, ProjectState], None],
     ) -> None:
         self.ensure_volume_progress = ensure_volume_progress
         self.load_or_create_outline = load_or_create_outline
         self.outline_scene_processor = outline_scene_processor
-        self.write_chapter_markdown = write_chapter_markdown
+        self.chapter_manuscript_assembler = chapter_manuscript_assembler
         self.save_state = save_state
 
     def run(
@@ -48,7 +48,7 @@ class VolumeWritingWorkflow:
         ):
             return state
         for chapter in outline.chapters:
-            self.write_chapter_markdown(volume_dir, chapter)
+            self.chapter_manuscript_assembler.write_chapter_markdown(volume_dir, chapter)
         volume.status = "drafted"
         self.save_state(series_dir, state)
         return state

@@ -63,6 +63,32 @@ class FakeLLM:
         raise AssertionError(task)
 
 
+class FakeSceneLlmCalls:
+    def __init__(self, draft=None, review_status=None, revised=None) -> None:
+        self.draft_response = draft or {
+            "title": "Draft of scene",
+            "body": "Draft content.",
+        }
+        self.review_status = review_status
+        self.revised_response = revised or {
+            "title": "Revised scene",
+            "body": self.draft_response.get("body", ""),
+        }
+
+    def draft(self, *, state, outline, scene):
+        return self.draft_response
+
+    def review(self, *, draft_data):
+        if self.review_status is None:
+            return None
+        if isinstance(self.review_status, str):
+            return {"ready_for_publication": self.review_status == "ready_for_publication"}
+        return self.review_status
+
+    def revise(self, *, draft_text, review_text):
+        return self.revised_response
+
+
 class NotReadyLLM(FakeLLM):
     def complete_json(self, *, task, messages, schema, temperature=0.4, max_tokens=None):
         if task == "volume_review":
