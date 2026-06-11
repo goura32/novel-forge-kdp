@@ -19,6 +19,7 @@ from .repository import ProjectRepository
 from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
 from .series_continuation_workflow import SeriesContinuationWorkflow
 from .series_planner import SeriesPlanner
+from .outline_scene_processor import OutlineSceneProcessor
 from .volume_completion_workflow import VolumeCompletionWorkflow
 from .volume_outline_workflow import VolumeOutlineWorkflow
 from .volume_writing_workflow import VolumeWritingWorkflow
@@ -125,16 +126,18 @@ class NovelForge:
         outline: VolumeOutline,
         max_scenes: int | None,
     ) -> bool:
-        processed = 0
-        for chapter in outline.chapters:
-            for scene in chapter.scenes:
-                if max_scenes is not None and processed >= max_scenes:
-                    self._save_state(series_dir, state)
-                    return True
-                progress = next(p for p in volume.scenes if p.chapter == chapter.number and p.scene == scene.number)
-                if self._process_scene(series_dir, volume_dir, state, outline, chapter, scene, progress):
-                    processed += 1
-        return False
+        processor = OutlineSceneProcessor(
+            process_scene=self._process_scene,
+            save_state=self._save_state,
+        )
+        return processor.process(
+            series_dir=series_dir,
+            volume_dir=volume_dir,
+            state=state,
+            outline=outline,
+            volume=volume,
+            max_scenes=max_scenes,
+        )
 
     def _process_scene(self, series_dir: Path, volume_dir: Path, state: ProjectState, outline: VolumeOutline, chapter: ChapterPlan, scene: ScenePlan, progress: SceneProgress) -> bool:
         result = SceneWorkflow(

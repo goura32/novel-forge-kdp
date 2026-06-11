@@ -447,6 +447,46 @@ def test_continue_series_delegates_to_series_continuation_workflow(tmp_path, mon
     assert calls[1] == ("continue_series", "hoshikuzu-library")
 
 
+def test_process_outline_scenes_delegates_to_outline_scene_processor(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyOutlineSceneProcessor:
+        def __init__(self, **kwargs):
+            calls.append(("init", sorted(kwargs.keys())))
+
+        def process(self, *, series_dir, volume_dir, state, outline, volume, max_scenes):
+            calls.append(
+                (
+                    "process",
+                    series_dir.name,
+                    len(outline.chapters),
+                    volume.number,
+                    max_scenes,
+                )
+            )
+            return False
+
+    monkeypatch.setattr(workflow_module, "OutlineSceneProcessor", SpyOutlineSceneProcessor, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.plan_series("星 図書館")
+    volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
+    volume_dir.mkdir(parents=True)
+    outline_data = FakeLLM().complete_json(task="volume_outline", messages=[], schema={})
+    outline = workflow_module.VolumeOutline.model_validate(outline_data)
+
+    result = forge._process_outline_scenes(
+        tmp_path / "hoshikuzu-library", volume_dir, state, state.volumes[0], outline, max_scenes=1
+    )
+
+    assert result is False
+    assert calls[0][0] == "init"
+    assert calls[0][1] == ["process_scene", "save_state"]
+    assert calls[1] == ("process", "hoshikuzu-library", len(outline.chapters), 1, 1)
+
+
 def test_safe_series_file_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
     import novel_forge_kdp.workflow as workflow_module
 
