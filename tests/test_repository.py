@@ -156,3 +156,20 @@ def test_state_store_overwrite_is_silent(tmp_path, capsys):
     assert captured.err == ""
     assert store.load(path) == {"version": 2}
     assert (tmp_path / "state.json.bak").exists()
+
+
+
+def test_project_repository_writes_named_json_artifacts(tmp_path):
+    from novel_forge_kdp.repository import ProjectRepository
+
+    repo = ProjectRepository()
+    series_dir = tmp_path / "series"
+    volume_dir = series_dir / "volume_001"
+
+    repo.save_series_plan(series_dir, {"title": "Series"})
+    repo.save_volume_outline(volume_dir, {"title": "Outline"})
+    repo.save_bible(series_dir, {"characters": []})
+
+    assert repo.load_json(series_dir / "series_plan.json") == {"title": "Series"}
+    assert repo.load_json(volume_dir / "outline.json") == {"title": "Outline"}
+    assert repo.load_json(series_dir / "bible.json") == {"characters": []}

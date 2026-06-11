@@ -8,14 +8,15 @@ from typing import Any
 from .artifact_paths import SeriesPaths
 from .exporter import KdpExporter, chapter_heading_count, write_epub, write_export_chapters
 from .llm import OllamaOpenAIClient
+from .llm_task_runner import LLMTaskRunner
 from .models import ChapterPlan, ProjectState, ScenePlan, SceneProgress, SeriesPlan, VolumeOutline, VolumeProgress
 from .outline_validation import OutlineValidationError, validate_volume_outline
 from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
 from .prompts import PromptStore
 from .quality import QualityGate, QualityGateError, review_has_blocking_issues
-from .repository import StateRepository
-from .schemas import load_schema
+from .repository import ProjectRepository
 from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
+from .volume_completion_workflow import VolumeCompletionWorkflow
 
 
 class NovelForgeError(RuntimeError):
@@ -28,7 +29,7 @@ class NovelForge:
         ensure_dir(self.workspace)
         self.prompts = prompts or PromptStore()
         self.llm = llm
-        self.repository = StateRepository()
+        self.repository = ProjectRepository()
 
     def _client_for(self, series_dir: Path | None = None) -> Any:
         if self.llm is not None:
@@ -37,6 +38,9 @@ class NovelForge:
             return self.llm
         return OllamaOpenAIClient(log_dir=(series_dir / "raw_logs") if series_dir is not None else (self.workspace / "_raw_logs"))
 
+    def _task_runner_for(self, series_dir: Path | None = None) -> LLMTaskRunner:
+        return LLMTaskRunner(client=self._client_for(series_dir), prompts=self.prompts, system_prompt=_json_system())
+
     def _series_dir(self, slug: str) -> Path:
         try:
             return safe_child_dir(self.workspace, slug)
@@ -44,13 +48,7 @@ class NovelForge:
             raise NovelForgeError(str(exc)) from exc
 
     def plan_series(self, keyword: str) -> ProjectState:
-        schema = load_schema("series_plan")
-        prompt = self.prompts.render("series_plan", keyword=keyword)
-        data = self._client_for().complete_json(
-            task="series_plan",
-            messages=[{"role": "system", "content": _json_system()}, {"role": "user", "content": prompt}],
-            schema=schema,
-        )
+        data = self._task_runner_for().complete("series_plan", keyword=keyword)
         data["slug"] = safe_slug(data.get("slug") or data.get("title") or keyword)
         series = SeriesPlan.model_validate(data)
         state = ProjectState(
@@ -63,7 +61,7 @@ class NovelForge:
         ensure_dir(series_dir)
         paths = SeriesPaths(series_dir)
         ensure_dir(paths.raw_logs)
-        self._write_json(paths.series_plan, series.model_dump())
+        self.repository.save_series_plan(series_dir, series.model_dump())
         self._save_state(series_dir, state)
         return state
 
@@ -110,17 +108,14 @@ class NovelForge:
             self._validate_volume_outline(outline, number)
             self._sync_volume_scenes(volume, outline)
             return outline
-        outline_data = self._client_for(series_dir).complete_json(
-            task="volume_outline",
-            messages=[
-                {"role": "system", "content": _json_system()},
-                {"role": "user", "content": self.prompts.render("volume_outline", series=json.dumps(state.series.model_dump(), ensure_ascii=False), volume_number=number)},
-            ],
-            schema=load_schema("volume_outline"),
+        outline_data = self._task_runner_for(series_dir).complete(
+            "volume_outline",
+            series=json.dumps(state.series.model_dump(), ensure_ascii=False),
+            volume_number=number,
         )
         outline = VolumeOutline.model_validate(outline_data)
         self._validate_volume_outline(outline, number)
-        self._write_json(outline_path, outline.model_dump())
+        self.repository.save_volume_outline(volume_dir, outline.model_dump())
         volume.status = "outlined"
         self._sync_volume_scenes(volume, outline)
         self._save_state(series_dir, state)
@@ -148,7 +143,7 @@ class NovelForge:
 
     def _process_scene(self, series_dir: Path, volume_dir: Path, state: ProjectState, outline: VolumeOutline, chapter: ChapterPlan, scene: ScenePlan, progress: SceneProgress) -> bool:
         result = SceneWorkflow(
-            llm_calls=SceneLlmCalls(client=self._client_for(series_dir), prompts=self.prompts, system_prompt=_json_system()),
+            llm_calls=SceneLlmCalls(runner=self._task_runner_for(series_dir)),
             write_json=self._write_json,
             save_state=self._save_state,
         ).run(
@@ -216,23 +211,25 @@ class NovelForge:
         volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
         manuscript = self._assemble_volume_manuscript(series_dir, volume)
         outline = self._load_validated_outline(volume_dir, number)
-
-        review = self._review_volume(series_dir, state, manuscript)
-        self._write_json(volume_dir / "volume_review.json", review)
-        revised = self._revise_volume(series_dir, manuscript, review, expected_chapter_count=len(outline.chapters))
-        self._write_json(volume_dir / "volume_revised.json", revised)
-
-        volume.title = revised["title"]
-        revised_md = f"# {revised['title']}\n\n{revised['body'].strip()}\n"
-        (volume_dir / "volume_revised.md").write_text(revised_md, encoding="utf-8")
-        final_review = self._final_review_if_needed(series_dir, volume_dir, state, review, revised_md)
-        self._ensure_publication_allowed(series_dir, state, volume, final_review, force)
-
-        self._update_bible(series_dir, revised_md)
-        self._export_kdp(volume_dir, revised["title"], revised_md)
-        volume.status = "revised"
-        self._save_state(series_dir, state)
-        return state
+        return VolumeCompletionWorkflow(
+            review_volume=self._review_volume,
+            revise_volume=self._revise_volume,
+            final_review_if_needed=self._final_review_if_needed,
+            ensure_publication_allowed=self._ensure_publication_allowed,
+            update_bible=self._update_bible,
+            export_kdp=self._export_kdp,
+            save_state=self._save_state,
+            save_volume_review=self.repository.save_volume_review,
+            save_volume_revised=self.repository.save_volume_revised,
+        ).run(
+            series_dir=series_dir,
+            volume_dir=volume_dir,
+            state=state,
+            volume=volume,
+            outline=outline,
+            manuscript=manuscript,
+            force=force,
+        )
 
     def _ensure_revised_scenes(self, slug: str, state: ProjectState, number: int) -> tuple[ProjectState, VolumeProgress]:
         volume = next((v for v in state.volumes if v.number == number), None)
@@ -247,23 +244,18 @@ class NovelForge:
         return outline
 
     def _review_volume(self, series_dir: Path, state: ProjectState, manuscript: str) -> dict[str, Any]:
-        return self._client_for(series_dir).complete_json(
-            task="volume_review",
-            messages=[
-                {"role": "system", "content": _json_system()},
-                {"role": "user", "content": self.prompts.render("volume_review", series=state.series.model_dump_json(), manuscript=manuscript)},
-            ],
-            schema=load_schema("volume_review"),
+        return self._task_runner_for(series_dir).complete(
+            "volume_review",
+            series=state.series.model_dump_json(),
+            manuscript=manuscript,
         )
 
     def _revise_volume(self, series_dir: Path, manuscript: str, review: dict[str, Any], expected_chapter_count: int) -> dict[str, Any]:
-        revised = self._client_for(series_dir).complete_json(
-            task="revise_volume",
-            messages=[
-                {"role": "system", "content": _json_system()},
-                {"role": "user", "content": self.prompts.render("revise_volume", manuscript=manuscript, review=json.dumps(review, ensure_ascii=False), chapter_count=expected_chapter_count)},
-            ],
-            schema=load_schema("revised_volume"),
+        revised = self._task_runner_for(series_dir).complete(
+            "revise_volume",
+            manuscript=manuscript,
+            review=json.dumps(review, ensure_ascii=False),
+            chapter_count=expected_chapter_count,
         )
         try:
             QualityGate().ensure_revised_volume_structure(revised["body"], expected_chapter_count)
@@ -275,7 +267,7 @@ class NovelForge:
         if review.get("ready_for_publication", False):
             return review
         final_review = self._review_volume(series_dir, state, revised_md)
-        self._write_json(volume_dir / "volume_review_final.json", final_review)
+        self.repository.save_volume_review(volume_dir, final_review, final=True)
         return final_review
 
     def _ensure_publication_allowed(self, series_dir: Path, state: ProjectState, volume: VolumeProgress, final_review: dict[str, Any], force: bool) -> None:
@@ -341,15 +333,12 @@ class NovelForge:
     def _update_bible(self, series_dir: Path, manuscript: str) -> None:
         bible_path = SeriesPaths(series_dir).bible
         existing = bible_path.read_text(encoding="utf-8") if bible_path.exists() else "{}"
-        bible = self._client_for(series_dir).complete_json(
-            task="bible_update",
-            messages=[
-                {"role": "system", "content": _json_system()},
-                {"role": "user", "content": self.prompts.render("bible_update", existing_bible=existing, manuscript=manuscript)},
-            ],
-            schema=load_schema("bible_update"),
+        bible = self._task_runner_for(series_dir).complete(
+            "bible_update",
+            existing_bible=existing,
+            manuscript=manuscript,
         )
-        self._write_json(bible_path, bible)
+        self.repository.save_bible(series_dir, bible)
 
     @staticmethod
     def _export_kdp(volume_dir: Path, title: str, manuscript: str) -> None:

@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .paths import ensure_dir
-from .prompts import PromptStore
-from .schemas import load_schema
 
 JsonWriter = Callable[[Path, dict[str, Any]], None]
 StateSaver = Callable[[Path, Any], None]
@@ -27,53 +25,21 @@ class SceneLlmCallsProtocol(Protocol):
 class SceneLlmCalls:
     """Production LLM calls for scene drafting, reviewing, and revision."""
 
-    client: Any
-    prompts: PromptStore
-    system_prompt: str
+    runner: Any
 
     def draft(self, *, state: Any, outline: Any, scene: Any) -> dict[str, Any]:
-        return self.client.complete_json(
-            task="scene_draft",
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {
-                    "role": "user",
-                    "content": self.prompts.render(
-                        "scene_draft",
-                        series=state.series.model_dump_json(),
-                        outline=outline.model_dump_json(),
-                        scene=scene.model_dump_json(),
-                    ),
-                },
-            ],
-            schema=load_schema("scene_draft"),
+        return self.runner.complete(
+            "scene_draft",
+            series=state.series.model_dump_json(),
+            outline=outline.model_dump_json(),
+            scene=scene.model_dump_json(),
         )
 
     def review(self, *, draft_data: dict[str, Any]) -> dict[str, Any] | None:
-        return self.client.complete_json(
-            task="review",
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {
-                    "role": "user",
-                    "content": self.prompts.render("review", text=json.dumps(draft_data, ensure_ascii=False)),
-                },
-            ],
-            schema=load_schema("review"),
-        )
+        return self.runner.complete("review", text=json.dumps(draft_data, ensure_ascii=False))
 
     def revise(self, *, draft_text: str, review_text: str) -> dict[str, Any] | None:
-        return self.client.complete_json(
-            task="revise_scene",
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {
-                    "role": "user",
-                    "content": self.prompts.render("revise_scene", draft=draft_text, review=review_text),
-                },
-            ],
-            schema=load_schema("revised_scene"),
-        )
+        return self.runner.complete("revise_scene", draft=draft_text, review=review_text)
 
 
 @dataclass

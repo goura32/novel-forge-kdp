@@ -76,6 +76,32 @@ class StateRepository:
         return raw
 
 
+class ProjectRepository(StateRepository):
+    """Project-level JSON artifact persistence."""
+
+    def load_json(self, path: "Path") -> dict[str, Any]:
+        return self._store.load(path)
+
+    def save_json(self, path: "Path", data: dict[str, Any]) -> None:
+        self._store.save(path, data)
+
+    def save_series_plan(self, series_dir: "Path", data: dict[str, Any]) -> None:
+        self.save_json(series_dir / "series_plan.json", data)
+
+    def save_volume_outline(self, volume_dir: "Path", data: dict[str, Any]) -> None:
+        self.save_json(volume_dir / "outline.json", data)
+
+    def save_volume_review(self, volume_dir: "Path", data: dict[str, Any], *, final: bool = False) -> None:
+        filename = "volume_review_final.json" if final else "volume_review.json"
+        self.save_json(volume_dir / filename, data)
+
+    def save_volume_revised(self, volume_dir: "Path", data: dict[str, Any]) -> None:
+        self.save_json(volume_dir / "volume_revised.json", data)
+
+    def save_bible(self, series_dir: "Path", data: dict[str, Any]) -> None:
+        self.save_json(series_dir / "bible.json", data)
+
+
 def model_dump(state: ProjectState) -> dict[str, Any]:
     """Minimal wrapper so workflow.py can use it as ``state.model_dump()``."""
     return state.model_dump(by_alias=False)
