@@ -525,6 +525,10 @@ def test_complete_volume_delegates_to_volume_completion_workflow(tmp_path, monke
 
     calls = []
 
+    def spy_assemble(series_dir, volume):
+        calls.append(("assemble", series_dir.name, volume.number))
+        return "# Spy Manuscript\n\nBody.\n"
+
     class SpyCompletionWorkflow:
         def __init__(self, **kwargs):
             calls.append(("init", sorted(kwargs.keys())))
@@ -534,6 +538,7 @@ def test_complete_volume_delegates_to_volume_completion_workflow(tmp_path, monke
             volume.status = "revised"
             return state
 
+    monkeypatch.setattr(workflow_module, "assemble_volume_manuscript_for_forge", spy_assemble, raising=False)
     monkeypatch.setattr(workflow_module, "VolumeCompletionWorkflow", SpyCompletionWorkflow, raising=False)
 
     forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
@@ -543,5 +548,27 @@ def test_complete_volume_delegates_to_volume_completion_workflow(tmp_path, monke
     state = forge.complete_volume("hoshikuzu-library", force=True)
 
     assert state.volumes[0].status == "revised"
-    assert calls[0][0] == "init"
-    assert calls[1] == ("run", "hoshikuzu-library", "volume_001", 1, 1, True)
+    assert calls[0] == ("assemble", "hoshikuzu-library", 1)
+    assert calls[1][0] == "init"
+    assert calls[2] == ("run", "hoshikuzu-library", "volume_001", 1, 1, True)
+
+
+def test_export_volume_uses_shared_manuscript_assembly_helper(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    def spy_assemble(series_dir, volume):
+        calls.append(("assemble", series_dir.name, volume.number))
+        return "# Export Spy\n\nBody.\n"
+
+    monkeypatch.setattr(workflow_module, "assemble_volume_manuscript_for_forge", spy_assemble, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    forge.write_volume("hoshikuzu-library")
+
+    export_path = forge.export_volume("hoshikuzu-library")
+
+    assert calls == [("assemble", "hoshikuzu-library", 1)]
+    assert export_path.read_text(encoding="utf-8").startswith("# Export Spy")

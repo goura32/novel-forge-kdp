@@ -28,6 +28,13 @@ class NovelForgeError(RuntimeError):
     pass
 
 
+def assemble_volume_manuscript_for_forge(series_dir: Path, volume: VolumeProgress) -> str:
+    try:
+        return ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
+    except (ManuscriptAssemblyError, PathSafetyError) as exc:
+        raise NovelForgeError(str(exc)) from exc
+
+
 class NovelForge:
     def __init__(self, workspace: Path, llm: Any | None = None, prompts: PromptStore | None = None) -> None:
         self.workspace = Path(workspace)
@@ -198,10 +205,7 @@ class NovelForge:
         number = volume_number or state.current_volume
         state, volume = self._ensure_revised_scenes(slug, state, number)
         volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
-        try:
-            manuscript = ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
-        except (ManuscriptAssemblyError, PathSafetyError) as exc:
-            raise NovelForgeError(str(exc)) from exc
+        manuscript = assemble_volume_manuscript_for_forge(series_dir, volume)
         outline = self._load_validated_outline(volume_dir, number)
         return VolumeCompletionWorkflow(
             review_volume=self._review_volume,
@@ -302,10 +306,7 @@ class NovelForge:
         if (volume_dir / "volume_revised.md").exists():
             manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8")
         else:
-            try:
-                manuscript = ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
-            except (ManuscriptAssemblyError, PathSafetyError) as exc:
-                raise NovelForgeError(str(exc)) from exc
+            manuscript = assemble_volume_manuscript_for_forge(series_dir, volume)
         self._export_kdp(volume_dir, volume.title, manuscript)
         return volume_dir / "exports" / "manuscript.md"
 
