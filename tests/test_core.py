@@ -516,24 +516,8 @@ def test_novelforge_no_longer_exposes_safe_series_file_helper():
     assert not hasattr(NovelForge, "_safe_series_file")
 
 
-def test_assemble_volume_manuscript_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
-    import novel_forge_kdp.workflow as workflow_module
-
-    calls = []
-
-    class SpyManuscriptAssembler:
-        def assemble_volume(self, *, series_dir, volume):
-            calls.append(("assemble_volume", series_dir.name, volume.number))
-            return "# Spy Manuscript\n\nBody.\n"
-
-    monkeypatch.setattr(workflow_module, "ManuscriptAssembler", SpyManuscriptAssembler, raising=False)
-
-    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
-    state = forge.plan_series("星 図書館")
-    manuscript = forge._assemble_volume_manuscript(tmp_path / "hoshikuzu-library", state.volumes[0])
-
-    assert manuscript == "# Spy Manuscript\n\nBody.\n"
-    assert calls == [("assemble_volume", "hoshikuzu-library", 1)]
+def test_novelforge_no_longer_exposes_assemble_volume_manuscript_helper():
+    assert not hasattr(NovelForge, "_assemble_volume_manuscript")
 
 
 def test_complete_volume_delegates_to_volume_completion_workflow(tmp_path, monkeypatch):

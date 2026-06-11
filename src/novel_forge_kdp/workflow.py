@@ -198,7 +198,10 @@ class NovelForge:
         number = volume_number or state.current_volume
         state, volume = self._ensure_revised_scenes(slug, state, number)
         volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
-        manuscript = self._assemble_volume_manuscript(series_dir, volume)
+        try:
+            manuscript = ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
+        except (ManuscriptAssemblyError, PathSafetyError) as exc:
+            raise NovelForgeError(str(exc)) from exc
         outline = self._load_validated_outline(volume_dir, number)
         return VolumeCompletionWorkflow(
             review_volume=self._review_volume,
@@ -296,15 +299,15 @@ class NovelForge:
         if volume is None:
             raise NovelForgeError(f"volume not found: {number}")
         volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
-        manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8") if (volume_dir / "volume_revised.md").exists() else self._assemble_volume_manuscript(series_dir, volume)
+        if (volume_dir / "volume_revised.md").exists():
+            manuscript = (volume_dir / "volume_revised.md").read_text(encoding="utf-8")
+        else:
+            try:
+                manuscript = ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
+            except (ManuscriptAssemblyError, PathSafetyError) as exc:
+                raise NovelForgeError(str(exc)) from exc
         self._export_kdp(volume_dir, volume.title, manuscript)
         return volume_dir / "exports" / "manuscript.md"
-
-    def _assemble_volume_manuscript(self, series_dir: Path, volume: VolumeProgress) -> str:
-        try:
-            return ManuscriptAssembler().assemble_volume(series_dir=series_dir, volume=volume)
-        except (ManuscriptAssemblyError, PathSafetyError) as exc:
-            raise NovelForgeError(str(exc)) from exc
 
     def _update_bible(self, series_dir: Path, manuscript: str) -> None:
         bible_path = SeriesPaths(series_dir).bible
