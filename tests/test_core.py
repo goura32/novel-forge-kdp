@@ -512,22 +512,8 @@ def test_write_volume_injects_outline_scene_processor_into_volume_writing_workfl
         "write_volume should inject OutlineSceneProcessor, not a raw process callback"
 
 
-def test_safe_series_file_delegates_to_manuscript_assembler(tmp_path, monkeypatch):
-    import novel_forge_kdp.workflow as workflow_module
-
-    calls = []
-
-    class SpyManuscriptAssembler:
-        def safe_series_file(self, series_dir, relative_path):
-            calls.append((series_dir.name, relative_path))
-            return series_dir / "safe.md"
-
-    monkeypatch.setattr(workflow_module, "ManuscriptAssembler", SpyManuscriptAssembler, raising=False)
-
-    result = NovelForge._safe_series_file(tmp_path / "series", "scene.md")
-
-    assert result == tmp_path / "series" / "safe.md"
-    assert calls == [("series", "scene.md")]
+def test_novelforge_no_longer_exposes_safe_series_file_helper():
+    assert not hasattr(NovelForge, "_safe_series_file")
 
 
 def test_assemble_volume_manuscript_delegates_to_manuscript_assembler(tmp_path, monkeypatch):

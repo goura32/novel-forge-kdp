@@ -171,13 +171,6 @@ class NovelForge:
         (chapter_dir / "chapter.md").write_text("\n\n".join(parts).strip() + "\n", encoding="utf-8")
 
     @staticmethod
-    def _safe_series_file(series_dir: Path, relative_path: str) -> Path:
-        try:
-            return ManuscriptAssembler().safe_series_file(series_dir, relative_path)
-        except PathSafetyError as exc:
-            raise NovelForgeError(str(exc)) from exc
-
-    @staticmethod
     def _validate_volume_outline(outline: VolumeOutline, expected_number: int) -> None:
         try:
             validate_volume_outline(outline, expected_number)
