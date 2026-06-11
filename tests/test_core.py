@@ -157,3 +157,35 @@ def test_continue_series_revises_unfinished_or_starts_next_volume(tmp_path):
     assert second.current_volume == 2
     assert any(v.number == 2 for v in second.volumes)
     assert (tmp_path / "hoshikuzu-library" / "volume_002" / "outline.json").exists()
+
+
+
+def test_write_volume_process_scene_delegates_to_scene_workflow(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpySceneWorkflow:
+        def __init__(self, *args, **kwargs):
+            calls.append(("init", args, kwargs))
+
+        def run(self, *, series_dir, volume_dir, state, outline, chapter, scene, progress):
+            calls.append(("run", chapter.number, scene.number, progress.status))
+            scene_dir = volume_dir / "chapters" / f"chapter_{chapter.number:03d}"
+            scene_dir.mkdir(parents=True, exist_ok=True)
+            scene_md = scene_dir / f"scene_{scene.number:03d}.md"
+            scene_md.write_text("# Spy Scene\n\nBody from spy.\n", encoding="utf-8")
+            progress.status = "revised"
+            progress.path = str(scene_md.relative_to(series_dir))
+            return workflow_module.SceneResult(revised_now=True)
+
+    monkeypatch.setattr(workflow_module, "SceneWorkflow", SpySceneWorkflow, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    state = forge.write_volume("hoshikuzu-library", max_scenes=1)
+
+    assert calls[0][0] == "init"
+    assert calls[1] == ("run", 1, 1, "planned")
+    assert state.volumes[0].scenes[0].status == "revised"
+    assert (tmp_path / "hoshikuzu-library" / "volume_001" / "chapters" / "chapter_001" / "scene_001.md").read_text(encoding="utf-8").startswith("# Spy Scene")

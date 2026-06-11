@@ -14,6 +14,7 @@ from .paths import PathSafetyError, ensure_dir, safe_child_dir, safe_slug
 from .prompts import PromptStore
 from .quality import QualityGate, QualityGateError, review_has_blocking_issues
 from .schemas import load_schema
+from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
 
 
 class NovelForgeError(RuntimeError):
@@ -143,45 +144,22 @@ class NovelForge:
         return False
 
     def _process_scene(self, series_dir: Path, volume_dir: Path, state: ProjectState, outline: VolumeOutline, chapter: ChapterPlan, scene: ScenePlan, progress: SceneProgress) -> bool:
-        scene_dir = ensure_dir(volume_dir / "chapters" / f"chapter_{chapter.number:03d}")
-        scene_md = scene_dir / f"scene_{scene.number:03d}.md"
-        revised_now = False
-        if progress.status == "planned":
-            draft = self._client_for(series_dir).complete_json(
-                task="scene_draft",
-                messages=[{"role": "system", "content": _json_system()}, {"role": "user", "content": self.prompts.render("scene_draft", series=state.series.model_dump_json(), outline=outline.model_dump_json(), scene=scene.model_dump_json())}],
-                schema=load_schema("scene_draft"),
-            )
-            self._write_json(scene_dir / f"scene_{scene.number:03d}.draft.json", draft)
-            progress.status = "drafted"
-            self._save_state(series_dir, state)
-        if progress.status == "drafted":
-            draft_path = scene_dir / f"scene_{scene.number:03d}.draft.json"
-            draft_data = json.loads(draft_path.read_text(encoding="utf-8"))
-            review = self._client_for(series_dir).complete_json(
-                task="review",
-                messages=[{"role": "system", "content": _json_system()}, {"role": "user", "content": self.prompts.render("review", text=json.dumps(draft_data, ensure_ascii=False))}],
-                schema=load_schema("review"),
-            )
-            self._write_json(scene_dir / f"scene_{scene.number:03d}.review.json", review)
-            progress.status = "reviewed"
-            self._save_state(series_dir, state)
-        if progress.status == "reviewed":
-            draft_path = scene_dir / f"scene_{scene.number:03d}.draft.json"
-            review_path = scene_dir / f"scene_{scene.number:03d}.review.json"
-            revised = self._client_for(series_dir).complete_json(
-                task="revise_scene",
-                messages=[{"role": "system", "content": _json_system()}, {"role": "user", "content": self.prompts.render("revise_scene", draft=draft_path.read_text(encoding="utf-8"), review=review_path.read_text(encoding="utf-8"))}],
-                schema=load_schema("revised_scene"),
-            )
-            self._write_json(scene_dir / f"scene_{scene.number:03d}.revised.json", revised)
-            scene_md.write_text(f"# {revised['title']}\n\n{revised['body'].strip()}\n", encoding="utf-8")
-            progress.status = "revised"
-            progress.path = str(scene_md.relative_to(series_dir))
+        result = SceneWorkflow(
+            llm_calls=SceneLlmCalls(client=self._client_for(series_dir), prompts=self.prompts, system_prompt=_json_system()),
+            write_json=self._write_json,
+            save_state=self._save_state,
+        ).run(
+            series_dir=series_dir,
+            volume_dir=volume_dir,
+            state=state,
+            outline=outline,
+            chapter=chapter,
+            scene=scene,
+            progress=progress,
+        )
+        if result.revised_now:
             self._write_chapter_markdown(volume_dir, chapter)
-            self._save_state(series_dir, state)
-            revised_now = True
-        return revised_now
+        return result.revised_now
 
     def _write_chapter_markdown(self, volume_dir: Path, chapter: ChapterPlan) -> None:
         chapter_dir = ensure_dir(volume_dir / "chapters" / f"chapter_{chapter.number:03d}")
