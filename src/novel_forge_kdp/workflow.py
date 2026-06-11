@@ -16,7 +16,9 @@ from .prompts import PromptStore
 from .quality import QualityGate, QualityGateError, review_has_blocking_issues
 from .repository import ProjectRepository
 from .scene_workflow import SceneLlmCalls, SceneResult, SceneWorkflow
+from .series_planner import SeriesPlanner
 from .volume_completion_workflow import VolumeCompletionWorkflow
+from .volume_writing_workflow import VolumeWritingWorkflow
 
 
 class NovelForgeError(RuntimeError):
@@ -47,23 +49,18 @@ class NovelForge:
         except PathSafetyError as exc:
             raise NovelForgeError(str(exc)) from exc
 
-    def plan_series(self, keyword: str) -> ProjectState:
-        data = self._task_runner_for().complete("series_plan", keyword=keyword)
-        data["slug"] = safe_slug(data.get("slug") or data.get("title") or keyword)
-        series = SeriesPlan.model_validate(data)
-        state = ProjectState(
-            series=series,
-            volumes=[VolumeProgress(number=v.number, title=v.title) for v in series.planned_volumes[:1]],
-        )
-        series_dir = self._series_dir(series.slug)
+    def _new_series_dir(self, slug: str) -> Path:
+        series_dir = self._series_dir(slug)
         if series_dir.exists():
-            raise NovelForgeError(f"series already exists: {series.slug}")
-        ensure_dir(series_dir)
-        paths = SeriesPaths(series_dir)
-        ensure_dir(paths.raw_logs)
-        self.repository.save_series_plan(series_dir, series.model_dump())
-        self._save_state(series_dir, state)
-        return state
+            raise NovelForgeError(f"series already exists: {slug}")
+        return series_dir
+
+    def plan_series(self, keyword: str) -> ProjectState:
+        return SeriesPlanner(
+            task_runner=self._task_runner_for(),
+            repository=self.repository,
+            series_dir_for=self._new_series_dir,
+        ).plan(keyword=keyword)
 
     def status(self, slug: str) -> ProjectState:
         series_dir = self._series_dir(slug)
@@ -75,18 +72,18 @@ class NovelForge:
     def write_volume(self, slug: str, volume_number: int | None = None, max_scenes: int | None = None) -> ProjectState:
         series_dir = self._series_dir(slug)
         state = self.status(slug)
-        number = volume_number or state.current_volume
-        volume = self._ensure_volume_progress(state, number)
-        volume_dir = ensure_dir(SeriesPaths(series_dir).volume(number).root)
-        outline = self._load_or_create_outline(series_dir, volume_dir, state, volume, number)
-
-        if self._process_outline_scenes(series_dir, volume_dir, state, volume, outline, max_scenes):
-            return state
-        for chapter in outline.chapters:
-            self._write_chapter_markdown(volume_dir, chapter)
-        volume.status = "drafted"
-        self._save_state(series_dir, state)
-        return state
+        return VolumeWritingWorkflow(
+            ensure_volume_progress=self._ensure_volume_progress,
+            load_or_create_outline=self._load_or_create_outline,
+            process_outline_scenes=self._process_outline_scenes,
+            write_chapter_markdown=self._write_chapter_markdown,
+            save_state=self._save_state,
+        ).run(
+            series_dir=series_dir,
+            state=state,
+            volume_number=volume_number,
+            max_scenes=max_scenes,
+        )
 
     def _ensure_volume_progress(self, state: ProjectState, number: int) -> VolumeProgress:
         if number > len(state.series.planned_volumes):

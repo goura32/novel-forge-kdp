@@ -111,6 +111,7 @@ def test_new_series_creates_resumeable_scene_workflow(tmp_path):
     state = forge.plan_series("星 図書館")
     assert state.series.title == "星屑の図書館"
     assert (tmp_path / "hoshikuzu-library" / "state.json").exists()
+    assert (tmp_path / "hoshikuzu-library" / "raw_logs").is_dir()
 
     state = forge.write_volume("hoshikuzu-library")
     volume_dir = tmp_path / "hoshikuzu-library" / "volume_001"
@@ -157,6 +158,39 @@ def test_continue_series_revises_unfinished_or_starts_next_volume(tmp_path):
     assert second.current_volume == 2
     assert any(v.number == 2 for v in second.volumes)
     assert (tmp_path / "hoshikuzu-library" / "volume_002" / "outline.json").exists()
+
+
+
+def test_write_volume_delegates_to_volume_writing_workflow(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpyVolumeWritingWorkflow:
+        def __init__(self, **kwargs):
+            calls.append(("init", sorted(kwargs.keys())))
+
+        def run(self, *, series_dir, state, volume_number, max_scenes):
+            calls.append(("run", series_dir.name, volume_number, max_scenes))
+            state.volumes[0].status = "drafted"
+            return state
+
+    monkeypatch.setattr(workflow_module, "VolumeWritingWorkflow", SpyVolumeWritingWorkflow, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    forge.plan_series("星 図書館")
+    state = forge.write_volume("hoshikuzu-library", volume_number=1, max_scenes=2)
+
+    assert state.volumes[0].status == "drafted"
+    assert calls[0][0] == "init"
+    assert calls[0][1] == [
+        "ensure_volume_progress",
+        "load_or_create_outline",
+        "process_outline_scenes",
+        "save_state",
+        "write_chapter_markdown",
+    ]
+    assert calls[1] == ("run", "hoshikuzu-library", 1, 2)
 
 
 
@@ -222,6 +256,35 @@ def test_plan_series_saves_state_through_state_repository(tmp_path, monkeypatch)
         ("save_series_plan", "hoshikuzu-library", "hoshikuzu-library"),
         ("save_state", "hoshikuzu-library", "hoshikuzu-library"),
     ]
+
+
+def test_plan_series_delegates_to_series_planner(tmp_path, monkeypatch):
+    import novel_forge_kdp.workflow as workflow_module
+
+    calls = []
+
+    class SpySeriesPlanner:
+        def __init__(self, **kwargs):
+            calls.append(("init", sorted(kwargs.keys())))
+
+        def plan(self, *, keyword):
+            calls.append(("plan", keyword))
+            data = FakeLLM().complete_json(task="series_plan", messages=[], schema={})
+            series = workflow_module.SeriesPlan.model_validate(data)
+            return workflow_module.ProjectState(
+                series=series,
+                volumes=[workflow_module.VolumeProgress(number=1, title=series.planned_volumes[0].title)],
+            )
+
+    monkeypatch.setattr(workflow_module, "SeriesPlanner", SpySeriesPlanner, raising=False)
+
+    forge = NovelForge(workspace=tmp_path, llm=FakeLLM())
+    state = forge.plan_series("星 図書館")
+
+    assert state.series.slug == "hoshikuzu-library"
+    assert calls[0][0] == "init"
+    assert calls[0][1] == ["repository", "series_dir_for", "task_runner"]
+    assert calls[1] == ("plan", "星 図書館")
 
 
 def test_status_loads_state_through_state_repository(tmp_path, monkeypatch):
